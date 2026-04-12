@@ -39,8 +39,8 @@ async def create_task(
     )
     session.add(task)
     await session.commit()
-    await session.refresh(task)
-    return task
+    # Re-fetch with relationships loaded to avoid lazy-load in async
+    return await get_task(session, task.id)
 
 
 async def get_task(session: AsyncSession, task_id: int) -> Task | None:
@@ -51,6 +51,7 @@ async def get_task(session: AsyncSession, task_id: int) -> Task | None:
             selectinload(Task.creator),
             selectinload(Task.comments).selectinload(Comment.user),
             selectinload(Task.attachments),
+            selectinload(Task.project),
         )
         .where(Task.id == task_id)
     )
