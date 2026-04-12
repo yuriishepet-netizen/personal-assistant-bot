@@ -1,23 +1,23 @@
 from __future__ import annotations
 
-"""AI Parser service using Google Gemini for extracting tasks from text, voice, and images."""
+"""AI Parser service using Google Gemini REST API for extracting tasks."""
 
 import json
 import logging
 import re
+import base64
 from dataclasses import dataclass
 from datetime import datetime
 
-import google.generativeai as genai
+import aiohttp
 
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
-
 settings = get_settings()
-genai.configure(api_key=settings.GEMINI_API_KEY)
 
 MODEL_NAME = "gemini-2.5-flash"
+API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent"
 
 TASK_EXTRACTION_PROMPT = """Ты — AI-ассистент для извлечения задач. Проанализируй входные данные и извлеки информацию о задаче.
 
@@ -42,24 +42,7 @@ TASK_EXTRACTION_PROMPT = """Ты — AI-ассистент для извлече
 - Текущая дата: {current_date}
 - Часовой пояс: {timezone}
 
-Верни ТОЛЬКО валидный JSON, без markdown блоков."""
-
-MEETING_EXTRACTION_PROMPT = """Ты — AI-ассистент для планирования встреч. Проанализируй текст и извлеки информацию о встрече.
-
-Верни JSON в формате:
-{
-    "title": "Название встречи",
-    "datetime": "ISO 8601 datetime",
-    "duration_minutes": 60,
-    "participants": ["имена"],
-    "description": "Описание или null",
-    "confidence": 0.0-1.0
-}
-
-Текущая дата: {current_date}
-Часовой пояс: {timezone}
-
-Верни ТОЛЬКО валидный JSON, без markdown блоков."""
+Верни ТОЛЬКО валидный JSON, без markdown блоков и без пояснений."""
 
 
 @dataclass
@@ -75,18 +58,19 @@ class ParsedTask:
     confidence: float = 0.0
 
 
-def _clean_json_response(text: str) -> str:
-    """Extract JSON from Gemini response, handling thinking blocks and markdown."""
+def _extract_json(text: str) -> dict:
+    """Extract JSON object from any text, handling markdown and thinking blocks."""
     text = text.strip()
     # Remove markdown code blocks
     text = re.sub(r"```(?:json)?\s*", "", text)
     text = re.sub(r"```", "", text)
     text = text.strip()
-    # Try to find JSON object in the response
-    match = re.search(r"\{[\s\S]*\}", text)
+    # Find JSON object
+    match = re.search(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", text)
     if match:
-        return match.group(0)
-    return text
+        return json.loads(match.group(0))
+    # Fallback: try to parse the whole text
+    return json.loads(text)
 
 
 def _parse_datetime(value: str | None) -> datetime | None:
@@ -98,23 +82,93 @@ def _parse_datetime(value: str | None) -> datetime | None:
         return None
 
 
+async def _call_gemini(prompt: str, response_json: bool = True) -> str:
+    """Call Gemini REST API directly, bypassing SDK issues."""
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+    }
+    if response_json:
+        payload["generationConfig"] = {
+            "responseMimeType": "application/json",
+        }
+
+    url = f"{API_URL}?key={settings.GEMINI_API_KEY}"
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, json=payload) as resp:
+            if resp.status != 200:
+                error_text = await resp.text()
+                logger.error("Gemini API error %s: %s", resp.status, error_text[:500])
+                raise RuntimeError(f"Gemini API error {resp.status}: {error_text[:200]}")
+
+            data = await resp.json()
+            candidates = data.get("candidates", [])
+            if not candidates:
+                raise RuntimeError("No candidates in Gemini response")
+
+            parts = candidates[0].get("content", {}).get("parts", [])
+            # Gemini 2.5 may have thinking parts — find the text part
+            text_parts = [p["text"] for p in parts if "text" in p]
+            if not text_parts:
+                raise RuntimeError("No text in Gemini response")
+
+            return text_parts[-1]  # Last text part is usually the actual response
+
+
+async def _call_gemini_multimodal(parts_list: list, response_json: bool = True) -> str:
+    """Call Gemini REST API with multimodal content (images, audio)."""
+    api_parts = []
+    for p in parts_list:
+        if isinstance(p, str):
+            api_parts.append({"text": p})
+        elif isinstance(p, dict) and "data" in p:
+            api_parts.append({
+                "inline_data": {
+                    "mime_type": p["mime_type"],
+                    "data": base64.b64encode(p["data"]).decode("utf-8"),
+                }
+            })
+
+    payload = {
+        "contents": [{"parts": api_parts}],
+    }
+    if response_json:
+        payload["generationConfig"] = {
+            "responseMimeType": "application/json",
+        }
+
+    url = f"{API_URL}?key={settings.GEMINI_API_KEY}"
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, json=payload) as resp:
+            if resp.status != 200:
+                error_text = await resp.text()
+                logger.error("Gemini API error %s: %s", resp.status, error_text[:500])
+                raise RuntimeError(f"Gemini API error {resp.status}: {error_text[:200]}")
+
+            data = await resp.json()
+            candidates = data.get("candidates", [])
+            if not candidates:
+                raise RuntimeError("No candidates in Gemini response")
+
+            parts = candidates[0].get("content", {}).get("parts", [])
+            text_parts = [p["text"] for p in parts if "text" in p]
+            if not text_parts:
+                raise RuntimeError("No text in Gemini response")
+
+            return text_parts[-1]
+
+
 async def parse_text(text: str) -> ParsedTask:
     """Parse a task or meeting from plain text."""
-    model = genai.GenerativeModel(
-        MODEL_NAME,
-        generation_config=genai.GenerationConfig(
-            response_mime_type="application/json",
-        ),
-    )
     prompt = TASK_EXTRACTION_PROMPT.format(
         current_date=datetime.now().strftime("%Y-%m-%d %H:%M"),
         timezone=settings.TIMEZONE,
     )
 
-    response = await model.generate_content_async(f"{prompt}\n\nТекст: {text}")
-    raw = _clean_json_response(response.text)
-    logger.info("Gemini raw response: %s", raw[:500])
-    data = json.loads(raw)
+    raw_response = await _call_gemini(f"{prompt}\n\nТекст: {text}")
+    logger.info("Gemini response: %s", raw_response[:500])
+    data = _extract_json(raw_response)
 
     return ParsedTask(
         type=data.get("type", "task"),
@@ -131,12 +185,6 @@ async def parse_text(text: str) -> ParsedTask:
 
 async def parse_image(image_bytes: bytes, caption: str | None = None) -> ParsedTask:
     """Parse a task from a screenshot/image."""
-    model = genai.GenerativeModel(
-        MODEL_NAME,
-        generation_config=genai.GenerationConfig(
-            response_mime_type="application/json",
-        ),
-    )
     prompt = TASK_EXTRACTION_PROMPT.format(
         current_date=datetime.now().strftime("%Y-%m-%d %H:%M"),
         timezone=settings.TIMEZONE,
@@ -148,9 +196,8 @@ async def parse_image(image_bytes: bytes, caption: str | None = None) -> ParsedT
     parts.append("\nИзвлеки задачу из этого изображения:")
     parts.append({"mime_type": "image/jpeg", "data": image_bytes})
 
-    response = await model.generate_content_async(parts)
-    raw = _clean_json_response(response.text)
-    data = json.loads(raw)
+    raw_response = await _call_gemini_multimodal(parts)
+    data = _extract_json(raw_response)
 
     return ParsedTask(
         type=data.get("type", "task"),
@@ -170,9 +217,11 @@ async def parse_voice_text(transcribed_text: str) -> ParsedTask:
 
 async def transcribe_voice(audio_bytes: bytes) -> str:
     """Transcribe voice message using Gemini."""
-    model = genai.GenerativeModel(MODEL_NAME)
-    response = await model.generate_content_async([
-        "Транскрибируй это голосовое сообщение. Верни ТОЛЬКО текст транскрипции, без пояснений.",
-        {"mime_type": "audio/ogg", "data": audio_bytes},
-    ])
-    return response.text.strip()
+    raw = await _call_gemini_multimodal(
+        [
+            "Транскрибируй это голосовое сообщение. Верни ТОЛЬКО текст транскрипции, без пояснений.",
+            {"mime_type": "audio/ogg", "data": audio_bytes},
+        ],
+        response_json=False,
+    )
+    return raw.strip()

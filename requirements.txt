@@ -22,5 +22,8 @@ PyJWT==2.10.1
 # Settings
 pydantic-settings==2.7.1
 
+# HTTP Client
+aiohttp>=3.9.0
+
 # Utils
 python-dotenv==1.0.1
