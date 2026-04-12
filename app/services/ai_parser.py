@@ -3,6 +3,7 @@ from __future__ import annotations
 """AI Parser service using Google Gemini for extracting tasks from text, voice, and images."""
 
 import json
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -11,8 +12,12 @@ import google.generativeai as genai
 
 from app.config import get_settings
 
+logger = logging.getLogger(__name__)
+
 settings = get_settings()
 genai.configure(api_key=settings.GEMINI_API_KEY)
+
+MODEL_NAME = "gemini-2.5-flash"
 
 TASK_EXTRACTION_PROMPT = """Ты — AI-ассистент для извлечения задач. Проанализируй входные данные и извлеки информацию о задаче.
 
@@ -71,11 +76,17 @@ class ParsedTask:
 
 
 def _clean_json_response(text: str) -> str:
-    """Remove markdown code blocks from Gemini response."""
+    """Extract JSON from Gemini response, handling thinking blocks and markdown."""
     text = text.strip()
-    text = re.sub(r"^```(?:json)?\s*", "", text)
-    text = re.sub(r"\s*```$", "", text)
-    return text.strip()
+    # Remove markdown code blocks
+    text = re.sub(r"```(?:json)?\s*", "", text)
+    text = re.sub(r"```", "", text)
+    text = text.strip()
+    # Try to find JSON object in the response
+    match = re.search(r"\{[\s\S]*\}", text)
+    if match:
+        return match.group(0)
+    return text
 
 
 def _parse_datetime(value: str | None) -> datetime | None:
@@ -89,7 +100,12 @@ def _parse_datetime(value: str | None) -> datetime | None:
 
 async def parse_text(text: str) -> ParsedTask:
     """Parse a task or meeting from plain text."""
-    model = genai.GenerativeModel("gemini-2.5-flash")
+    model = genai.GenerativeModel(
+        MODEL_NAME,
+        generation_config=genai.GenerationConfig(
+            response_mime_type="application/json",
+        ),
+    )
     prompt = TASK_EXTRACTION_PROMPT.format(
         current_date=datetime.now().strftime("%Y-%m-%d %H:%M"),
         timezone=settings.TIMEZONE,
@@ -97,6 +113,7 @@ async def parse_text(text: str) -> ParsedTask:
 
     response = await model.generate_content_async(f"{prompt}\n\nТекст: {text}")
     raw = _clean_json_response(response.text)
+    logger.info("Gemini raw response: %s", raw[:500])
     data = json.loads(raw)
 
     return ParsedTask(
@@ -114,7 +131,12 @@ async def parse_text(text: str) -> ParsedTask:
 
 async def parse_image(image_bytes: bytes, caption: str | None = None) -> ParsedTask:
     """Parse a task from a screenshot/image."""
-    model = genai.GenerativeModel("gemini-2.5-flash")
+    model = genai.GenerativeModel(
+        MODEL_NAME,
+        generation_config=genai.GenerationConfig(
+            response_mime_type="application/json",
+        ),
+    )
     prompt = TASK_EXTRACTION_PROMPT.format(
         current_date=datetime.now().strftime("%Y-%m-%d %H:%M"),
         timezone=settings.TIMEZONE,
@@ -148,7 +170,7 @@ async def parse_voice_text(transcribed_text: str) -> ParsedTask:
 
 async def transcribe_voice(audio_bytes: bytes) -> str:
     """Transcribe voice message using Gemini."""
-    model = genai.GenerativeModel("gemini-2.5-flash")
+    model = genai.GenerativeModel(MODEL_NAME)
     response = await model.generate_content_async([
         "Транскрибируй это голосовое сообщение. Верни ТОЛЬКО текст транскрипции, без пояснений.",
         {"mime_type": "audio/ogg", "data": audio_bytes},
