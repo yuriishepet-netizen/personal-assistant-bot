@@ -7,5 +7,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Run both bot and API
-CMD ["sh", "-c", "alembic upgrade head && python -m app.run"]
+CMD ["python", "-m", "app.run"]
