@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Task API routes for the Lovable frontend."""
 
 from datetime import datetime

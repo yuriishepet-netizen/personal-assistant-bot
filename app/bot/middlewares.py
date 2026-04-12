@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Bot middlewares for auth and DB session injection."""
 
 from typing import Any, Awaitable, Callable

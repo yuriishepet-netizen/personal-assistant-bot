@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Calendar API routes for Google Calendar integration."""
 
 from datetime import datetime

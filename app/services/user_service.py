@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """User service for managing bot users."""
 
 from sqlalchemy import select

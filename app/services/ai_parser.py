@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """AI Parser service using Google Gemini for extracting tasks from text, voice, and images."""
 
 import json

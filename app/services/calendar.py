@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Google Calendar integration service."""
 
 from datetime import datetime, timedelta
