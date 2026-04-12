@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.user import User
 from app.models.task import TaskStatus, TaskPriority
 from app.services import ai_parser, task_service, user_service
+from app.services import calendar as cal_service
 from app.bot.keyboards import (
     task_confirm_keyboard,
     task_status_keyboard,
@@ -37,17 +38,24 @@ def _format_task_card(parsed) -> str:
     p_emoji = priority_map.get(parsed.priority, "⚪")
     p_name = parsed.priority or "не указан"
 
+    is_meeting = parsed.type == "meeting"
+    header = "📅 <b>Новая встреча</b>" if is_meeting else "📝 <b>Новая задача</b>"
+
     lines = [
-        f"📝 <b>Новая задача</b>\n",
+        f"{header}\n",
         f"<b>{parsed.title}</b>",
     ]
     if parsed.description:
         lines.append(f"📄 {parsed.description}")
     lines.append(f"{p_emoji} Приоритет: {p_name}")
+    if is_meeting and parsed.meeting_time:
+        lines.append(f"🕐 Время: {parsed.meeting_time.strftime('%d.%m.%Y %H:%M')}")
     if parsed.deadline:
         lines.append(f"📅 Дедлайн: {parsed.deadline.strftime('%d.%m.%Y %H:%M')}")
     if parsed.assignee_name:
         lines.append(f"👤 Ответственный: {parsed.assignee_name}")
+    if is_meeting and parsed.meeting_participants:
+        lines.append(f"👥 Участники: {', '.join(parsed.meeting_participants)}")
     lines.append(f"\n🤖 Уверенность AI: {int(parsed.confidence * 100)}%")
 
     return "\n".join(lines)
@@ -132,6 +140,7 @@ async def confirm_task(callback: CallbackQuery, session: AsyncSession, db_user: 
     from datetime import datetime
 
     deadline = datetime.fromisoformat(parsed["deadline"]) if parsed.get("deadline") else None
+    meeting_time = datetime.fromisoformat(parsed["meeting_time"]) if parsed.get("meeting_time") else None
 
     assignee_id = None
     if parsed.get("assignee_name"):
@@ -141,6 +150,36 @@ async def confirm_task(callback: CallbackQuery, session: AsyncSession, db_user: 
 
     priority = TaskPriority(parsed["priority"]) if parsed.get("priority") else TaskPriority.MEDIUM
 
+    # --- Create Google Calendar event for meetings ---
+    calendar_event_id = None
+    calendar_link = None
+    is_meeting = parsed.get("type") == "meeting" and meeting_time
+
+    if is_meeting:
+        if not db_user.google_refresh_token:
+            await callback.message.edit_text(
+                "⚠️ Google Calendar не подключён.\n"
+                "Встреча будет сохранена как задача без события в календаре.\n"
+                "Используй /connect_google для подключения.",
+                parse_mode="HTML",
+            )
+            # Still create the task below, just without calendar event
+        else:
+            try:
+                event = await cal_service.create_event(
+                    refresh_token=db_user.google_refresh_token,
+                    title=parsed["title"],
+                    start_time=meeting_time,
+                    duration_minutes=60,
+                    description=parsed.get("description"),
+                )
+                calendar_event_id = event.get("id")
+                calendar_link = event.get("link")
+                logger.info("Created Google Calendar event: %s", calendar_event_id)
+            except Exception as e:
+                logger.error("Failed to create calendar event: %s", e)
+                # Continue creating the task even if calendar fails
+
     task = await task_service.create_task(
         session=session,
         title=parsed["title"],
@@ -148,14 +187,36 @@ async def confirm_task(callback: CallbackQuery, session: AsyncSession, db_user: 
         description=parsed.get("description"),
         priority=priority,
         assignee_id=assignee_id,
-        deadline=deadline,
+        deadline=deadline or meeting_time,
+        calendar_event_id=calendar_event_id,
     )
 
-    await callback.message.edit_text(
-        f"✅ Задача <b>#{task.id}</b> создана!\n\n<b>{task.title}</b>",
-        reply_markup=task_actions_keyboard(task.id),
-        parse_mode="HTML",
-    )
+    # --- Format response message ---
+    if is_meeting and calendar_link:
+        await callback.message.edit_text(
+            f"✅ Встреча <b>#{task.id}</b> создана!\n\n"
+            f"<b>{task.title}</b>\n"
+            f"📅 {meeting_time.strftime('%d.%m.%Y %H:%M')}\n"
+            f"🔗 <a href='{calendar_link}'>Открыть в Google Calendar</a>",
+            reply_markup=task_actions_keyboard(task.id),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+    elif is_meeting:
+        await callback.message.edit_text(
+            f"✅ Встреча <b>#{task.id}</b> создана!\n\n"
+            f"<b>{task.title}</b>\n"
+            f"📅 {meeting_time.strftime('%d.%m.%Y %H:%M')}\n"
+            f"⚠️ Без события в Google Calendar",
+            reply_markup=task_actions_keyboard(task.id),
+            parse_mode="HTML",
+        )
+    else:
+        await callback.message.edit_text(
+            f"✅ Задача <b>#{task.id}</b> создана!\n\n<b>{task.title}</b>",
+            reply_markup=task_actions_keyboard(task.id),
+            parse_mode="HTML",
+        )
     await callback.answer()
 
 
