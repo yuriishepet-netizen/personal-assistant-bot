@@ -11,7 +11,11 @@ app = FastAPI(title="Personal Assistant API", version="1.0.0")
 # CORS for Lovable frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Restrict in production
+    allow_origins=[
+        "https://agile-calendar-hub.lovable.app",
+        "http://localhost:5173",
+        "http://localhost:3000",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -1,6 +1,7 @@
 """Auth routes — Google OAuth callback, JWT token generation."""
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_session
@@ -9,6 +10,10 @@ from app.services import calendar as cal_service
 from app.services import user_service
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+class TelegramLoginRequest(BaseModel):
+    telegram_id: int
 
 
 @router.get("/google/callback")
@@ -47,11 +52,11 @@ async def google_callback(
 
 @router.post("/telegram-login")
 async def telegram_login(
-    telegram_id: int,
+    data: TelegramLoginRequest,
     session: AsyncSession = Depends(get_session),
 ):
     """Generate JWT for a Telegram user (for Lovable app auth)."""
-    user = await user_service.get_user_by_telegram_id(session, telegram_id)
+    user = await user_service.get_user_by_telegram_id(session, data.telegram_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found. Send /start to the bot first.")
 
