@@ -85,6 +85,16 @@ async def update_task(session: AsyncSession, task_id: int, **kwargs) -> Task | N
     return await get_task(session, task_id)
 
 
+async def delete_task(session: AsyncSession, task_id: int) -> bool:
+    """Delete a task and its related comments/attachments. Returns True if deleted."""
+    task = await get_task(session, task_id)
+    if not task:
+        return False
+    await session.delete(task)
+    await session.commit()
+    return True
+
+
 async def add_comment(session: AsyncSession, task_id: int, user_id: int, text: str) -> Comment:
     comment = Comment(task_id=task_id, user_id=user_id, text=text)
     session.add(comment)

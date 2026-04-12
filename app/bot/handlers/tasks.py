@@ -20,6 +20,7 @@ from app.bot.keyboards import (
     task_priority_keyboard,
     tasks_filter_keyboard,
     task_actions_keyboard,
+    delete_confirm_keyboard,
     users_keyboard,
 )
 
@@ -422,6 +423,45 @@ async def process_comment(message: Message, session: AsyncSession, db_user: User
         await task_service.add_comment(session, task_id, db_user.id, message.text)
         await message.answer(f"💬 Комментарий добавлен к задаче #{task_id}")
     await state.set_state(None)
+
+
+# --- Delete task ---
+
+
+@router.callback_query(F.data.startswith("delete_ask:"))
+async def ask_delete_task(callback: CallbackQuery):
+    task_id = int(callback.data.split(":")[1])
+    await callback.message.edit_text(
+        f"🗑 Удалить задачу <b>#{task_id}</b>?\n\nЭто действие нельзя отменить.",
+        reply_markup=delete_confirm_keyboard(task_id),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("delete_yes:"))
+async def confirm_delete_task(callback: CallbackQuery, session: AsyncSession):
+    task_id = int(callback.data.split(":")[1])
+    deleted = await task_service.delete_task(session, task_id)
+    if deleted:
+        await callback.message.edit_text(
+            f"🗑 Задача <b>#{task_id}</b> удалена.",
+            parse_mode="HTML",
+        )
+    else:
+        await callback.message.edit_text("❌ Задача не найдена.")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("delete_no:"))
+async def cancel_delete_task(callback: CallbackQuery):
+    task_id = int(callback.data.split(":")[1])
+    await callback.message.edit_text(
+        f"✅ Задача <b>#{task_id}</b> не удалена.",
+        reply_markup=task_actions_keyboard(task_id),
+        parse_mode="HTML",
+    )
+    await callback.answer()
 
 
 # --- Team ---

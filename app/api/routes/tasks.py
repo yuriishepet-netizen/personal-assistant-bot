@@ -145,6 +145,18 @@ async def update_task_endpoint(
     return _task_to_response(task)
 
 
+@router.delete("/{task_id}", status_code=200)
+async def delete_task_endpoint(
+    task_id: int,
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+):
+    deleted = await task_service.delete_task(session, task_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return {"status": "ok", "message": f"Task #{task_id} deleted"}
+
+
 @router.get("/{task_id}/comments")
 async def list_comments(
     task_id: int,

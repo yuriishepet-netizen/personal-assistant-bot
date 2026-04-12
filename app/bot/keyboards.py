@@ -72,6 +72,17 @@ def task_actions_keyboard(task_id: int) -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(text="📎 Файлы", callback_data=f"attachments:{task_id}"),
+            InlineKeyboardButton(text="🗑 Удалить", callback_data=f"delete_ask:{task_id}"),
+        ],
+    ])
+
+
+def delete_confirm_keyboard(task_id: int) -> InlineKeyboardMarkup:
+    """Keyboard for confirming task deletion."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🗑 Да, удалить", callback_data=f"delete_yes:{task_id}"),
+            InlineKeyboardButton(text="⬅️ Отмена", callback_data=f"delete_no:{task_id}"),
         ],
     ])
 
