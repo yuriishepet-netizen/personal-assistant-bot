@@ -59,18 +59,43 @@ class ParsedTask:
 
 
 def _extract_json(text: str) -> dict:
-    """Extract JSON object from any text, handling markdown and thinking blocks."""
+    """Extract JSON object from text. Handles clean JSON, markdown blocks, etc."""
     text = text.strip()
-    # Remove markdown code blocks
-    text = re.sub(r"```(?:json)?\s*", "", text)
-    text = re.sub(r"```", "", text)
-    text = text.strip()
-    # Find JSON object
-    match = re.search(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", text)
-    if match:
-        return json.loads(match.group(0))
-    # Fallback: try to parse the whole text
-    return json.loads(text)
+
+    # 1) Try parsing the whole text as JSON first (works with responseMimeType)
+    try:
+        result = json.loads(text)
+        if isinstance(result, dict):
+            return result
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # 2) Remove markdown code blocks and try again
+    cleaned = re.sub(r"```(?:json)?\s*", "", text)
+    cleaned = re.sub(r"```", "", cleaned).strip()
+    try:
+        result = json.loads(cleaned)
+        if isinstance(result, dict):
+            return result
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # 3) Find JSON object using bracket matching (handles nested objects/arrays)
+    start = cleaned.find("{")
+    if start != -1:
+        depth = 0
+        for i in range(start, len(cleaned)):
+            if cleaned[i] == "{":
+                depth += 1
+            elif cleaned[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(cleaned[start : i + 1])
+                    except (json.JSONDecodeError, ValueError):
+                        break
+
+    raise ValueError(f"Could not extract JSON from response: {text[:200]}")
 
 
 def _parse_datetime(value: str | None) -> datetime | None:
@@ -107,12 +132,17 @@ async def _call_gemini(prompt: str, response_json: bool = True) -> str:
                 raise RuntimeError("No candidates in Gemini response")
 
             parts = candidates[0].get("content", {}).get("parts", [])
-            # Gemini 2.5 may have thinking parts — find the text part
-            text_parts = [p["text"] for p in parts if "text" in p]
+            # Gemini 2.5 has thinking parts with "thought": true — skip them
+            text_parts = [p["text"] for p in parts if "text" in p and not p.get("thought")]
             if not text_parts:
+                # Fallback: try all text parts (including thinking) — take the last one
+                text_parts = [p["text"] for p in parts if "text" in p]
+            if not text_parts:
+                logger.error("No text parts in Gemini response. Parts: %s", parts)
                 raise RuntimeError("No text in Gemini response")
 
-            return text_parts[-1]  # Last text part is usually the actual response
+            logger.info("Gemini raw text (first 300 chars): %s", text_parts[-1][:300])
+            return text_parts[-1]
 
 
 async def _call_gemini_multimodal(parts_list: list, response_json: bool = True) -> str:
@@ -152,8 +182,12 @@ async def _call_gemini_multimodal(parts_list: list, response_json: bool = True) 
                 raise RuntimeError("No candidates in Gemini response")
 
             parts = candidates[0].get("content", {}).get("parts", [])
-            text_parts = [p["text"] for p in parts if "text" in p]
+            # Skip thinking parts
+            text_parts = [p["text"] for p in parts if "text" in p and not p.get("thought")]
             if not text_parts:
+                text_parts = [p["text"] for p in parts if "text" in p]
+            if not text_parts:
+                logger.error("No text parts in multimodal response. Parts: %s", parts)
                 raise RuntimeError("No text in Gemini response")
 
             return text_parts[-1]
@@ -167,8 +201,13 @@ async def parse_text(text: str) -> ParsedTask:
     )
 
     raw_response = await _call_gemini(f"{prompt}\n\nТекст: {text}")
-    logger.info("Gemini response: %s", raw_response[:500])
-    data = _extract_json(raw_response)
+    logger.info("Gemini response (len=%d): %s", len(raw_response), raw_response[:500])
+
+    try:
+        data = _extract_json(raw_response)
+    except (json.JSONDecodeError, ValueError) as e:
+        logger.error("JSON parse failed. Error: %s. Raw response: %s", e, repr(raw_response[:500]))
+        raise
 
     return ParsedTask(
         type=data.get("type", "task"),
