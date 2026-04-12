@@ -24,6 +24,7 @@ class TaskCreate(BaseModel):
     priority: TaskPriority = TaskPriority.MEDIUM
     assignee_id: int | None = None
     deadline: datetime | None = None
+    project_id: int | None = None
 
 
 class TaskUpdate(BaseModel):
@@ -33,6 +34,7 @@ class TaskUpdate(BaseModel):
     priority: TaskPriority | None = None
     assignee_id: int | None = None
     deadline: datetime | None = None
+    project_id: int | None = None
 
 
 class CommentCreate(BaseModel):
@@ -50,6 +52,8 @@ class TaskResponse(BaseModel):
     creator_id: int
     creator_name: str | None = None
     deadline: datetime | None
+    project_id: int | None = None
+    project_name: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -79,6 +83,8 @@ def _task_to_response(task) -> dict:
         "creator_id": task.creator_id,
         "creator_name": task.creator.name if task.creator else None,
         "deadline": task.deadline,
+        "project_id": task.project_id,
+        "project_name": task.project.name if hasattr(task, "project") and task.project else None,
         "created_at": task.created_at,
         "updated_at": task.updated_at,
     }
@@ -89,12 +95,13 @@ async def list_tasks(
     status: TaskStatus | None = None,
     priority: TaskPriority | None = None,
     assignee_id: int | None = None,
+    project_id: int | None = None,
     limit: int = Query(default=50, le=100),
     offset: int = Query(default=0, ge=0),
     session: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ):
-    tasks = await task_service.get_tasks(session, status=status, assignee_id=assignee_id, priority=priority, limit=limit, offset=offset)
+    tasks = await task_service.get_tasks(session, status=status, assignee_id=assignee_id, priority=priority, project_id=project_id, limit=limit, offset=offset)
     return [_task_to_response(t) for t in tasks]
 
 
@@ -113,6 +120,7 @@ async def create_task_endpoint(
         priority=body.priority,
         assignee_id=body.assignee_id,
         deadline=body.deadline,
+        project_id=body.project_id,
     )
     return _task_to_response(task)
 

@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.api.routes import tasks, users, calendar, attachments, auth
+from app.api.routes import tasks, users, calendar, attachments, auth, projects
 
 app = FastAPI(title="Personal Assistant API", version="1.0.0")
 
@@ -32,6 +32,7 @@ app.include_router(users.router, prefix="/api")
 app.include_router(calendar.router, prefix="/api")
 app.include_router(attachments.router, prefix="/api")
 app.include_router(auth.router, prefix="/api")
+app.include_router(projects.router, prefix="/api")
 
 
 @app.get("/api/health")

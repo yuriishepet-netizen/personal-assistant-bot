@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload
 from app.models.task import Task, TaskStatus, TaskPriority
 from app.models.comment import Comment
 from app.models.attachment import Attachment
+from app.models.project import Project  # noqa: F401
 
 
 async def create_task(
@@ -23,6 +24,7 @@ async def create_task(
     assignee_id: int | None = None,
     deadline: datetime | None = None,
     calendar_event_id: str | None = None,
+    project_id: int | None = None,
 ) -> Task:
     task = Task(
         title=title,
@@ -33,6 +35,7 @@ async def create_task(
         assignee_id=assignee_id,
         deadline=deadline,
         calendar_event_id=calendar_event_id,
+        project_id=project_id,
     )
     session.add(task)
     await session.commit()
@@ -59,12 +62,14 @@ async def get_tasks(
     status: TaskStatus | None = None,
     assignee_id: int | None = None,
     priority: TaskPriority | None = None,
+    project_id: int | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> list[Task]:
     query = select(Task).options(
         selectinload(Task.assignee),
         selectinload(Task.creator),
+        selectinload(Task.project),
     )
 
     if status:
@@ -73,6 +78,8 @@ async def get_tasks(
         query = query.where(Task.assignee_id == assignee_id)
     if priority:
         query = query.where(Task.priority == priority)
+    if project_id:
+        query = query.where(Task.project_id == project_id)
 
     query = query.order_by(Task.created_at.desc()).limit(limit).offset(offset)
     result = await session.execute(query)

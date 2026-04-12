@@ -38,6 +38,7 @@ class Task(Base):
 
     deadline: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     calendar_event_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    project_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("projects.id"), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -46,5 +47,6 @@ class Task(Base):
 
     assignee = relationship("User", foreign_keys=[assignee_id], back_populates="assigned_tasks")
     creator = relationship("User", foreign_keys=[creator_id], back_populates="created_tasks")
+    project = relationship("Project", back_populates="tasks")
     comments = relationship("Comment", back_populates="task", cascade="all, delete-orphan")
     attachments = relationship("Attachment", back_populates="task", cascade="all, delete-orphan")
