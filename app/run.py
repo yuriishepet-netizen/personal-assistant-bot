@@ -16,10 +16,11 @@ settings = get_settings()
 
 async def run_api():
     """Run FastAPI server."""
+    port = settings.PORT if settings.PORT else settings.API_PORT
     config = uvicorn.Config(
         "app.api.main:app",
         host=settings.API_HOST,
-        port=settings.API_PORT,
+        port=port,
         log_level="info",
     )
     server = uvicorn.Server(config)

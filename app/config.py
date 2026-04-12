@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     # App
     API_HOST: str = "0.0.0.0"
     API_PORT: int = 8000
+    PORT: int = 0  # Railway sets this
     TIMEZONE: str = "Europe/Kyiv"
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
