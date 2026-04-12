@@ -84,8 +84,17 @@ async def handle_text_message(message: Message, session: AsyncSession, db_user: 
     try:
         parsed = await ai_parser.parse_text(message.text)
     except Exception as e:
+        error_msg = str(e).lower()
         logger.error(f"AI parse error: {e}")
-        await message.answer("❌ Не удалось распознать задачу. Попробуй переформулировать.")
+        if "resource_exhausted" in error_msg or "quota" in error_msg or "429" in error_msg:
+            await message.answer(
+                "⏳ Превышен лимит запросов к AI (Gemini). Подожди минуту и попробуй снова.\n"
+                "💡 Для снятия лимитов включи billing на Google AI Studio."
+            )
+        elif "api_key" in error_msg or "unauthorized" in error_msg or "401" in error_msg:
+            await message.answer("🔑 Ошибка API ключа Gemini. Обратись к администратору.")
+        else:
+            await message.answer("❌ Не удалось распознать задачу. Попробуй переформулировать.")
         return
 
     temp_id = str(uuid.uuid4())[:8]
