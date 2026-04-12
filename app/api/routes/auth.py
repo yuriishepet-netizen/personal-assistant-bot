@@ -56,9 +56,22 @@ async def telegram_login(
     session: AsyncSession = Depends(get_session),
 ):
     """Generate JWT for a Telegram user (for Lovable app auth)."""
+    from app.config import get_settings
+    from app.models.user import UserRole
+
     user = await user_service.get_user_by_telegram_id(session, data.telegram_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found. Send /start to the bot first.")
 
+    # Auto-promote first allowed ID to admin
+    settings = get_settings()
+    if (
+        settings.ALLOWED_TELEGRAM_IDS
+        and data.telegram_id == settings.ALLOWED_TELEGRAM_IDS[0]
+        and user.role != UserRole.ADMIN
+    ):
+        user.role = UserRole.ADMIN
+        await session.commit()
+
     token = create_access_token(user.id)
-    return {"access_token": token, "token_type": "bearer", "user_id": user.id, "name": user.name}
+    return {"access_token": token, "token_type": "bearer", "user_id": user.id, "name": user.name, "role": user.role.value}

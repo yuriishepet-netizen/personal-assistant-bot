@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user import User, UserRole
+from app.config import get_settings
 
 
 async def get_or_create_user(
@@ -14,17 +15,34 @@ async def get_or_create_user(
     name: str,
     username: str | None = None,
 ) -> User:
+    settings = get_settings()
     result = await session.execute(select(User).where(User.telegram_id == telegram_id))
     user = result.scalar_one_or_none()
 
     if user:
+        changed = False
         if user.name != name or user.username != username:
             user.name = name
             user.username = username
+            changed = True
+        # Auto-promote first allowed ID to admin
+        if (
+            settings.ALLOWED_TELEGRAM_IDS
+            and telegram_id == settings.ALLOWED_TELEGRAM_IDS[0]
+            and user.role != UserRole.ADMIN
+        ):
+            user.role = UserRole.ADMIN
+            changed = True
+        if changed:
             await session.commit()
         return user
 
-    user = User(telegram_id=telegram_id, name=name, username=username)
+    # New user — first allowed ID gets admin role
+    role = UserRole.MEMBER
+    if settings.ALLOWED_TELEGRAM_IDS and telegram_id == settings.ALLOWED_TELEGRAM_IDS[0]:
+        role = UserRole.ADMIN
+
+    user = User(telegram_id=telegram_id, name=name, username=username, role=role)
     session.add(user)
     await session.commit()
     await session.refresh(user)
