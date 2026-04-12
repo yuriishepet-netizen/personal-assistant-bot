@@ -89,7 +89,7 @@ def _parse_datetime(value: str | None) -> datetime | None:
 
 async def parse_text(text: str) -> ParsedTask:
     """Parse a task or meeting from plain text."""
-    model = genai.GenerativeModel("gemini-2.0-flash")
+    model = genai.GenerativeModel("gemini-2.5-flash")
     prompt = TASK_EXTRACTION_PROMPT.format(
         current_date=datetime.now().strftime("%Y-%m-%d %H:%M"),
         timezone=settings.TIMEZONE,
@@ -114,7 +114,7 @@ async def parse_text(text: str) -> ParsedTask:
 
 async def parse_image(image_bytes: bytes, caption: str | None = None) -> ParsedTask:
     """Parse a task from a screenshot/image."""
-    model = genai.GenerativeModel("gemini-2.0-flash")
+    model = genai.GenerativeModel("gemini-2.5-flash")
     prompt = TASK_EXTRACTION_PROMPT.format(
         current_date=datetime.now().strftime("%Y-%m-%d %H:%M"),
         timezone=settings.TIMEZONE,
@@ -148,7 +148,7 @@ async def parse_voice_text(transcribed_text: str) -> ParsedTask:
 
 async def transcribe_voice(audio_bytes: bytes) -> str:
     """Transcribe voice message using Gemini."""
-    model = genai.GenerativeModel("gemini-2.0-flash")
+    model = genai.GenerativeModel("gemini-2.5-flash")
     response = await model.generate_content_async([
         "Транскрибируй это голосовое сообщение. Верни ТОЛЬКО текст транскрипции, без пояснений.",
         {"mime_type": "audio/ogg", "data": audio_bytes},
