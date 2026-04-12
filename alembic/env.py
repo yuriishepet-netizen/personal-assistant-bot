@@ -7,6 +7,10 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from app.config import get_settings
 from app.db.base import Base
+from app.models.user import User  # noqa: F401
+from app.models.task import Task  # noqa: F401
+from app.models.comment import Comment  # noqa: F401
+from app.models.attachment import Attachment  # noqa: F401
 
 config = context.config
 if config.config_file_name is not None:
