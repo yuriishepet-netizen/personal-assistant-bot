@@ -10,10 +10,11 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.models.task import TaskStatus, TaskPriority
 from app.services import ai_parser, task_service, user_service
 from app.services import calendar as cal_service
+from app.services import notification_service
 from app.bot.keyboards import (
     task_confirm_keyboard,
     task_status_keyboard,
@@ -192,6 +193,9 @@ async def confirm_task(callback: CallbackQuery, session: AsyncSession, db_user: 
         calendar_event_id=calendar_event_id,
     )
 
+    is_admin = db_user.role == UserRole.ADMIN
+    kb = task_actions_keyboard(task.id, is_admin=is_admin)
+
     # --- Format response message ---
     if is_meeting and calendar_link:
         await callback.message.edit_text(
@@ -199,7 +203,7 @@ async def confirm_task(callback: CallbackQuery, session: AsyncSession, db_user: 
             f"<b>{task.title}</b>\n"
             f"📅 {meeting_time.strftime('%d.%m.%Y %H:%M')}\n"
             f"🔗 <a href='{calendar_link}'>Открыть в Google Calendar</a>",
-            reply_markup=task_actions_keyboard(task.id),
+            reply_markup=kb,
             parse_mode="HTML",
             disable_web_page_preview=True,
         )
@@ -209,16 +213,36 @@ async def confirm_task(callback: CallbackQuery, session: AsyncSession, db_user: 
             f"<b>{task.title}</b>\n"
             f"📅 {meeting_time.strftime('%d.%m.%Y %H:%M')}\n"
             f"⚠️ Без события в Google Calendar",
-            reply_markup=task_actions_keyboard(task.id),
+            reply_markup=kb,
             parse_mode="HTML",
         )
     else:
         await callback.message.edit_text(
             f"✅ Задача <b>#{task.id}</b> создана!\n\n<b>{task.title}</b>",
-            reply_markup=task_actions_keyboard(task.id),
+            reply_markup=kb,
             parse_mode="HTML",
         )
     await callback.answer()
+
+    # --- Notify assignee about new task ---
+    if assignee_id and assignee_id != db_user.id:
+        assignee = await user_service.get_user_by_id(session, assignee_id)
+        if assignee:
+            await notification_service.notify_task_assigned(
+                bot=callback.bot,
+                task=task,
+                assignee=assignee,
+                assigner=db_user,
+            )
+
+    # --- Notify all team members about new task ---
+    all_users = await user_service.get_all_users(session)
+    await notification_service.notify_task_created(
+        bot=callback.bot,
+        task=task,
+        creator=db_user,
+        team_users=[u for u in all_users if u.id != assignee_id],  # exclude assignee (already notified)
+    )
 
 
 @router.callback_query(F.data.startswith("cancel:"))
@@ -389,15 +413,16 @@ async def show_status_keyboard(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("status:"))
-async def change_status(callback: CallbackQuery, session: AsyncSession):
+async def change_status(callback: CallbackQuery, session: AsyncSession, db_user: User):
     parts = callback.data.split(":")
     task_id, new_status = int(parts[1]), parts[2]
 
     task = await task_service.update_task(session, task_id, status=TaskStatus(new_status))
     if task:
+        is_admin = db_user.role == UserRole.ADMIN
         await callback.message.edit_text(
             f"✅ Статус задачи <b>#{task.id}</b> изменён на <b>{new_status}</b>",
-            reply_markup=task_actions_keyboard(task_id),
+            reply_markup=task_actions_keyboard(task_id, is_admin=is_admin),
             parse_mode="HTML",
         )
     await callback.answer()
@@ -429,7 +454,11 @@ async def process_comment(message: Message, session: AsyncSession, db_user: User
 
 
 @router.callback_query(F.data.startswith("delete_ask:"))
-async def ask_delete_task(callback: CallbackQuery):
+async def ask_delete_task(callback: CallbackQuery, db_user: User):
+    # Only admins can delete tasks
+    if db_user.role != UserRole.ADMIN:
+        await callback.answer("⛔ Только администратор может удалять задачи", show_alert=True)
+        return
     task_id = int(callback.data.split(":")[1])
     await callback.message.edit_text(
         f"🗑 Удалить задачу <b>#{task_id}</b>?\n\nЭто действие нельзя отменить.",
@@ -454,11 +483,12 @@ async def confirm_delete_task(callback: CallbackQuery, session: AsyncSession):
 
 
 @router.callback_query(F.data.startswith("delete_no:"))
-async def cancel_delete_task(callback: CallbackQuery):
+async def cancel_delete_task(callback: CallbackQuery, db_user: User):
     task_id = int(callback.data.split(":")[1])
+    is_admin = db_user.role == UserRole.ADMIN
     await callback.message.edit_text(
         f"✅ Задача <b>#{task_id}</b> не удалена.",
-        reply_markup=task_actions_keyboard(task_id),
+        reply_markup=task_actions_keyboard(task_id, is_admin=is_admin),
         parse_mode="HTML",
     )
     await callback.answer()

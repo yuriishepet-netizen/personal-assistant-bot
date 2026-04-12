@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_session
 from app.api.deps import get_current_user
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.models.task import TaskStatus, TaskPriority
 from app.services import task_service
 
@@ -159,6 +159,8 @@ async def delete_task_endpoint(
     session: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ):
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Only admins can delete tasks")
     deleted = await task_service.delete_task(session, task_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Task not found")

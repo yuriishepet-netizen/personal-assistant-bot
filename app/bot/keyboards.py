@@ -63,18 +63,19 @@ def users_keyboard(users: list, temp_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def task_actions_keyboard(task_id: int) -> InlineKeyboardMarkup:
+def task_actions_keyboard(task_id: int, is_admin: bool = True) -> InlineKeyboardMarkup:
     """Keyboard for task actions in task detail view."""
-    return InlineKeyboardMarkup(inline_keyboard=[
+    rows = [
         [
             InlineKeyboardButton(text="📊 Статус", callback_data=f"show_status:{task_id}"),
             InlineKeyboardButton(text="💬 Комментарий", callback_data=f"comment:{task_id}"),
         ],
-        [
-            InlineKeyboardButton(text="📎 Файлы", callback_data=f"attachments:{task_id}"),
-            InlineKeyboardButton(text="🗑 Удалить", callback_data=f"delete_ask:{task_id}"),
-        ],
-    ])
+    ]
+    second_row = [InlineKeyboardButton(text="📎 Файлы", callback_data=f"attachments:{task_id}")]
+    if is_admin:
+        second_row.append(InlineKeyboardButton(text="🗑 Удалить", callback_data=f"delete_ask:{task_id}"))
+    rows.append(second_row)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def delete_confirm_keyboard(task_id: int) -> InlineKeyboardMarkup:
