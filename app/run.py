@@ -29,11 +29,14 @@ async def run_api():
 
 async def run_bot():
     """Run Telegram bot polling."""
-    bot = create_bot()
-    dp = create_dispatcher()
-    asyncio.create_task(reminder_loop(bot))
-    logger.info("Bot starting...")
-    await dp.start_polling(bot)
+    try:
+        bot = create_bot()
+        dp = create_dispatcher()
+        asyncio.create_task(reminder_loop(bot))
+        logger.info("Bot starting...")
+        await dp.start_polling(bot)
+    except Exception as e:
+        logger.error("Bot failed: %s", e)
 
 
 async def main():
