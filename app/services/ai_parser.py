@@ -22,7 +22,7 @@ API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}
 TASK_EXTRACTION_PROMPT = """Ты — AI-ассистент для извлечения задач. Проанализируй входные данные и извлеки информацию о задаче.
 
 Верни JSON в формате:
-{
+{{
     "type": "task" или "meeting",
     "title": "Название задачи/встречи",
     "description": "Описание (если есть)",
@@ -32,7 +32,7 @@ TASK_EXTRACTION_PROMPT = """Ты — AI-ассистент для извлече
     "meeting_time": "ISO 8601 datetime (только для встреч) или null",
     "meeting_participants": ["имена участников"] или null,
     "confidence": 0.0-1.0
-}
+}}
 
 Правила:
 - Если пользователь просит создать встречу/звонок/созвон — type = "meeting"
