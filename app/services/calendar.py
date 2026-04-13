@@ -185,7 +185,7 @@ async def get_events(
     refresh_token: str,
     time_min: datetime | None = None,
     time_max: datetime | None = None,
-    max_results: int = 50,
+    max_results: int = 250,
 ) -> list[dict]:
     """Get calendar events in a time range."""
     service = _get_calendar_service(refresh_token)

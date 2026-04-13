@@ -36,7 +36,7 @@ class EventUpdate(BaseModel):
 async def list_events(
     time_min: datetime | None = None,
     time_max: datetime | None = None,
-    max_results: int = Query(default=50, le=100),
+    max_results: int = Query(default=250, le=2500),
     session: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ):
