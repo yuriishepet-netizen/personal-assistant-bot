@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """AI Parser service using Google Gemini REST API for extracting tasks."""
 
+import asyncio
 import json
 import logging
 import re
@@ -113,8 +114,32 @@ def _parse_datetime(value: str | None) -> datetime | None:
         return None
 
 
+_RETRYABLE_STATUSES = {429, 500, 502, 503}
+_MAX_RETRIES = 3
+_RETRY_DELAYS = [2, 4, 8]  # seconds — exponential backoff
+
+
+def _parse_gemini_response(data: dict) -> str:
+    """Extract text from Gemini API JSON response."""
+    candidates = data.get("candidates", [])
+    if not candidates:
+        raise RuntimeError("No candidates in Gemini response")
+
+    parts = candidates[0].get("content", {}).get("parts", [])
+    # Gemini 2.5 has thinking parts with "thought": true — skip them
+    text_parts = [p["text"] for p in parts if "text" in p and not p.get("thought")]
+    if not text_parts:
+        text_parts = [p["text"] for p in parts if "text" in p]
+    if not text_parts:
+        logger.error("No text parts in Gemini response. Parts: %s", parts)
+        raise RuntimeError("No text in Gemini response")
+
+    logger.info("Gemini raw text (first 300 chars): %s", text_parts[-1][:300])
+    return text_parts[-1]
+
+
 async def _call_gemini(prompt: str, response_json: bool = True) -> str:
-    """Call Gemini REST API directly, bypassing SDK issues."""
+    """Call Gemini REST API with automatic retry on 429/503 errors."""
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
     }
@@ -125,34 +150,32 @@ async def _call_gemini(prompt: str, response_json: bool = True) -> str:
 
     url = f"{API_URL}?key={settings.GEMINI_API_KEY}"
 
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, json=payload) as resp:
-            if resp.status != 200:
+    last_error = None
+    for attempt in range(_MAX_RETRIES):
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    return _parse_gemini_response(data)
+
                 error_text = await resp.text()
+                last_error = f"Gemini API error {resp.status}: {error_text[:200]}"
+
+                if resp.status in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES - 1:
+                    delay = _RETRY_DELAYS[attempt]
+                    logger.warning("Gemini %s (attempt %d/%d), retrying in %ds...",
+                                   resp.status, attempt + 1, _MAX_RETRIES, delay)
+                    await asyncio.sleep(delay)
+                    continue
+
                 logger.error("Gemini API error %s: %s", resp.status, error_text[:500])
-                raise RuntimeError(f"Gemini API error {resp.status}: {error_text[:200]}")
+                raise RuntimeError(last_error)
 
-            data = await resp.json()
-            candidates = data.get("candidates", [])
-            if not candidates:
-                raise RuntimeError("No candidates in Gemini response")
-
-            parts = candidates[0].get("content", {}).get("parts", [])
-            # Gemini 2.5 has thinking parts with "thought": true — skip them
-            text_parts = [p["text"] for p in parts if "text" in p and not p.get("thought")]
-            if not text_parts:
-                # Fallback: try all text parts (including thinking) — take the last one
-                text_parts = [p["text"] for p in parts if "text" in p]
-            if not text_parts:
-                logger.error("No text parts in Gemini response. Parts: %s", parts)
-                raise RuntimeError("No text in Gemini response")
-
-            logger.info("Gemini raw text (first 300 chars): %s", text_parts[-1][:300])
-            return text_parts[-1]
+    raise RuntimeError(last_error or "Gemini API failed after retries")
 
 
 async def _call_gemini_multimodal(parts_list: list, response_json: bool = True) -> str:
-    """Call Gemini REST API with multimodal content (images, audio)."""
+    """Call Gemini REST API with multimodal content and automatic retry."""
     api_parts = []
     for p in parts_list:
         if isinstance(p, str):
@@ -175,28 +198,28 @@ async def _call_gemini_multimodal(parts_list: list, response_json: bool = True) 
 
     url = f"{API_URL}?key={settings.GEMINI_API_KEY}"
 
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, json=payload) as resp:
-            if resp.status != 200:
+    last_error = None
+    for attempt in range(_MAX_RETRIES):
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    return _parse_gemini_response(data)
+
                 error_text = await resp.text()
+                last_error = f"Gemini API error {resp.status}: {error_text[:200]}"
+
+                if resp.status in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES - 1:
+                    delay = _RETRY_DELAYS[attempt]
+                    logger.warning("Gemini multimodal %s (attempt %d/%d), retrying in %ds...",
+                                   resp.status, attempt + 1, _MAX_RETRIES, delay)
+                    await asyncio.sleep(delay)
+                    continue
+
                 logger.error("Gemini API error %s: %s", resp.status, error_text[:500])
-                raise RuntimeError(f"Gemini API error {resp.status}: {error_text[:200]}")
+                raise RuntimeError(last_error)
 
-            data = await resp.json()
-            candidates = data.get("candidates", [])
-            if not candidates:
-                raise RuntimeError("No candidates in Gemini response")
-
-            parts = candidates[0].get("content", {}).get("parts", [])
-            # Skip thinking parts
-            text_parts = [p["text"] for p in parts if "text" in p and not p.get("thought")]
-            if not text_parts:
-                text_parts = [p["text"] for p in parts if "text" in p]
-            if not text_parts:
-                logger.error("No text parts in multimodal response. Parts: %s", parts)
-                raise RuntimeError("No text in Gemini response")
-
-            return text_parts[-1]
+    raise RuntimeError(last_error or "Gemini API failed after retries")
 
 
 async def parse_text(
