@@ -65,9 +65,30 @@ async def get_all_users(session: AsyncSession) -> list[User]:
 
 
 async def find_user_by_name(session: AsyncSession, name: str) -> User | None:
-    """Fuzzy search for user by name (case-insensitive contains)."""
+    """Fuzzy search for user by name — handles Ukrainian/Russian declensions.
+
+    Tries exact ilike match first, then progressively shorter stems to handle
+    case suffixes like Зоряну→Зоряна, Юрию→Юрий, Маши→Маша.
+    """
+    # Try exact contains match first
     result = await session.execute(select(User).where(User.name.ilike(f"%{name}%")))
-    return result.scalar_one_or_none()
+    user = result.scalar_one_or_none()
+    if user:
+        return user
+
+    # Try stem matching: chop last 1-2 chars to handle declension
+    clean = name.strip()
+    if len(clean) >= 4:
+        for trim in range(1, 3):
+            stem = clean[: len(clean) - trim]
+            if len(stem) < 3:
+                break
+            result = await session.execute(select(User).where(User.name.ilike(f"%{stem}%")))
+            users = list(result.scalars().all())
+            if len(users) == 1:
+                return users[0]
+
+    return None
 
 
 async def set_user_role(session: AsyncSession, user_id: int, role: UserRole) -> User | None:

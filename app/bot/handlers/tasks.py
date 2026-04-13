@@ -178,6 +178,17 @@ async def confirm_task(callback: CallbackQuery, session: AsyncSession, db_user: 
 
     priority = TaskPriority(parsed["priority"]) if parsed.get("priority") else TaskPriority.MEDIUM
 
+    # --- Auto-detect project from title/description ---
+    project_id = parsed.get("project_id")
+    if not project_id:
+        # Try to find project by name mentioned in title or description
+        projects = await task_service.get_accessible_projects(session, db_user.id)
+        search_text = (parsed.get("title", "") + " " + (parsed.get("description") or "")).lower()
+        for proj in projects:
+            if proj.name.lower() in search_text:
+                project_id = proj.id
+                break
+
     # --- Create Google Calendar event for meetings ---
     calendar_event_id = None
     calendar_link = None
