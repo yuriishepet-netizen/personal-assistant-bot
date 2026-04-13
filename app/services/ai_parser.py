@@ -28,7 +28,8 @@ TASK_EXTRACTION_PROMPT = """Ты — AI-ассистент для извлече
     "description": "Описание (если есть)",
     "deadline": "ISO 8601 datetime или null",
     "priority": "low" / "medium" / "high" / "critical" или null,
-    "assignee_name": "Имя ответственного или null",
+    "assignee_name": "Имя ответственного ТОЧНО как в списке команды, или null",
+    "project_name": "Название проекта ТОЧНО как в списке проектов, или null",
     "meeting_time": "ISO 8601 datetime (только для встреч) или null",
     "meeting_participants": ["имена участников"] или null,
     "confidence": 0.0-1.0
@@ -39,8 +40,12 @@ TASK_EXTRACTION_PROMPT = """Ты — AI-ассистент для извлече
 - Если это задача/дело/поручение — type = "task"
 - Дедлайн извлекай из контекста ("завтра", "до пятницы", "к 15 апреля")
 - Приоритет определяй по срочности слов ("срочно"="high", "критично"="critical", "когда будет время"="low")
+- assignee_name ДОЛЖЕН точно совпадать с одним из имён команды (учитывай падежи и сокращения: "Зоряну"→"Зоряна", "Юре"→"Yurii Shepet")
+- project_name ДОЛЖЕН точно совпадать с одним из проектов (учитывай падежи: "Вдало"→"Вдало")
 - Текущая дата: {current_date}
 - Часовой пояс: {timezone}
+{team_context}
+{projects_context}
 
 Верни ТОЛЬКО валидный JSON, без markdown блоков и без пояснений."""
 
@@ -53,6 +58,7 @@ class ParsedTask:
     deadline: datetime | None = None
     priority: str | None = None
     assignee_name: str | None = None
+    project_name: str | None = None
     meeting_time: datetime | None = None
     meeting_participants: list[str] | None = None
     confidence: float = 0.0
@@ -193,11 +199,30 @@ async def _call_gemini_multimodal(parts_list: list, response_json: bool = True) 
             return text_parts[-1]
 
 
-async def parse_text(text: str) -> ParsedTask:
-    """Parse a task or meeting from plain text."""
+async def parse_text(
+    text: str,
+    team_members: list[str] | None = None,
+    project_names: list[str] | None = None,
+) -> ParsedTask:
+    """Parse a task or meeting from plain text.
+
+    Args:
+        text: The raw text to parse.
+        team_members: List of team member names for assignee matching.
+        project_names: List of project names for project matching.
+    """
+    team_ctx = ""
+    if team_members:
+        team_ctx = f"- Команда: {', '.join(team_members)}"
+    projects_ctx = ""
+    if project_names:
+        projects_ctx = f"- Проекты: {', '.join(project_names)}"
+
     prompt = TASK_EXTRACTION_PROMPT.format(
         current_date=datetime.now().strftime("%Y-%m-%d %H:%M"),
         timezone=settings.TIMEZONE,
+        team_context=team_ctx,
+        projects_context=projects_ctx,
     )
 
     raw_response = await _call_gemini(f"{prompt}\n\nТекст: {text}")
@@ -216,17 +241,32 @@ async def parse_text(text: str) -> ParsedTask:
         deadline=_parse_datetime(data.get("deadline")),
         priority=data.get("priority"),
         assignee_name=data.get("assignee_name"),
+        project_name=data.get("project_name"),
         meeting_time=_parse_datetime(data.get("meeting_time")),
         meeting_participants=data.get("meeting_participants"),
         confidence=data.get("confidence", 0.5),
     )
 
 
-async def parse_image(image_bytes: bytes, caption: str | None = None) -> ParsedTask:
+async def parse_image(
+    image_bytes: bytes,
+    caption: str | None = None,
+    team_members: list[str] | None = None,
+    project_names: list[str] | None = None,
+) -> ParsedTask:
     """Parse a task from a screenshot/image."""
+    team_ctx = ""
+    if team_members:
+        team_ctx = f"- Команда: {', '.join(team_members)}"
+    projects_ctx = ""
+    if project_names:
+        projects_ctx = f"- Проекты: {', '.join(project_names)}"
+
     prompt = TASK_EXTRACTION_PROMPT.format(
         current_date=datetime.now().strftime("%Y-%m-%d %H:%M"),
         timezone=settings.TIMEZONE,
+        team_context=team_ctx,
+        projects_context=projects_ctx,
     )
 
     parts = [prompt]
@@ -245,20 +285,42 @@ async def parse_image(image_bytes: bytes, caption: str | None = None) -> ParsedT
         deadline=_parse_datetime(data.get("deadline")),
         priority=data.get("priority"),
         assignee_name=data.get("assignee_name"),
+        project_name=data.get("project_name"),
         confidence=data.get("confidence", 0.5),
     )
 
 
-async def parse_voice_text(transcribed_text: str) -> ParsedTask:
+async def parse_voice_text(
+    transcribed_text: str,
+    team_members: list[str] | None = None,
+    project_names: list[str] | None = None,
+) -> ParsedTask:
     """Parse a task from transcribed voice message text."""
-    return await parse_text(f"[Голосовое сообщение]: {transcribed_text}")
+    return await parse_text(
+        f"[Голосовое сообщение]: {transcribed_text}",
+        team_members=team_members,
+        project_names=project_names,
+    )
 
 
-async def transcribe_voice(audio_bytes: bytes) -> str:
-    """Transcribe voice message using Gemini."""
+async def transcribe_voice(
+    audio_bytes: bytes,
+    team_members: list[str] | None = None,
+) -> str:
+    """Transcribe voice message using Gemini.
+
+    If team_members is provided, uses them as context for better name recognition.
+    """
+    context = ""
+    if team_members:
+        context = (
+            f"\nКонтекст: имена людей в команде — {', '.join(team_members)}. "
+            "Используй правильное написание имён из списка."
+        )
+
     raw = await _call_gemini_multimodal(
         [
-            "Транскрибируй это голосовое сообщение. Верни ТОЛЬКО текст транскрипции, без пояснений.",
+            f"Транскрибируй это голосовое сообщение. Верни ТОЛЬКО текст транскрипции, без пояснений.{context}",
             {"mime_type": "audio/ogg", "data": audio_bytes},
         ],
         response_json=False,

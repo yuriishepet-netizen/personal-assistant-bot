@@ -9,7 +9,7 @@ from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user import User
-from app.services import ai_parser
+from app.services import ai_parser, user_service, task_service
 from app.bot.keyboards import task_confirm_keyboard, meeting_confirm_keyboard
 from app.bot.handlers.tasks import _format_task_card
 
@@ -23,16 +23,26 @@ async def handle_voice(message: Message, bot: Bot, session: AsyncSession, db_use
     await message.answer("🎤 Слушаю...")
 
     try:
+        # Fetch team & project context for better AI recognition
+        all_users = await user_service.get_all_users(session)
+        team_names = [u.name for u in all_users]
+        projects = await task_service.get_accessible_projects(session, db_user.id)
+        project_names = [p.name for p in projects]
+
         file = await bot.get_file(message.voice.file_id)
         file_bytes = await bot.download_file(file.file_path)
         audio_data = file_bytes.read()
 
-        # Transcribe
-        transcription = await ai_parser.transcribe_voice(audio_data)
+        # Transcribe with team context for better name recognition
+        transcription = await ai_parser.transcribe_voice(audio_data, team_members=team_names)
         await message.answer(f"📝 Распознано: <i>{transcription}</i>", parse_mode="HTML")
 
-        # Parse task/meeting
-        parsed = await ai_parser.parse_voice_text(transcription)
+        # Parse task/meeting with full context
+        parsed = await ai_parser.parse_voice_text(
+            transcription,
+            team_members=team_names,
+            project_names=project_names,
+        )
 
     except Exception as e:
         logger.error(f"Voice processing error: {e}")
@@ -48,6 +58,7 @@ async def handle_voice(message: Message, bot: Bot, session: AsyncSession, db_use
             "deadline": parsed.deadline.isoformat() if parsed.deadline else None,
             "priority": parsed.priority,
             "assignee_name": parsed.assignee_name,
+            "project_name": parsed.project_name,
             "meeting_time": parsed.meeting_time.isoformat() if parsed.meeting_time else None,
             "meeting_participants": parsed.meeting_participants,
         }

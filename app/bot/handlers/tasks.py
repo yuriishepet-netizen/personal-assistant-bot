@@ -49,6 +49,7 @@ PRIORITY_LABELS = {
 _MENU_BUTTONS = frozenset({
     "📋 Задачи", "👤 Мои задачи", "🤖 Claude AI",
     "📅 Календарь", "👥 Команда", "❓ Помощь",
+    "🌐 Браузер",
 })
 
 
@@ -118,7 +119,17 @@ async def handle_text_message(message: Message, session: AsyncSession, db_user: 
     await message.answer("🤖 Анализирую...")
 
     try:
-        parsed = await ai_parser.parse_text(message.text)
+        # Fetch team & project context for better AI parsing
+        all_users = await user_service.get_all_users(session)
+        team_names = [u.name for u in all_users]
+        projects = await task_service.get_accessible_projects(session, db_user.id)
+        project_names = [p.name for p in projects]
+
+        parsed = await ai_parser.parse_text(
+            message.text,
+            team_members=team_names,
+            project_names=project_names,
+        )
     except Exception as e:
         error_msg = str(e).lower()
         logger.error(f"AI parse error: {e}")
@@ -142,6 +153,7 @@ async def handle_text_message(message: Message, session: AsyncSession, db_user: 
             "deadline": parsed.deadline.isoformat() if parsed.deadline else None,
             "priority": parsed.priority,
             "assignee_name": parsed.assignee_name,
+            "project_name": parsed.project_name,
             "meeting_time": parsed.meeting_time.isoformat() if parsed.meeting_time else None,
             "meeting_participants": parsed.meeting_participants,
         }
@@ -178,16 +190,24 @@ async def confirm_task(callback: CallbackQuery, session: AsyncSession, db_user: 
 
     priority = TaskPriority(parsed["priority"]) if parsed.get("priority") else TaskPriority.MEDIUM
 
-    # --- Auto-detect project from title/description ---
+    # --- Auto-detect project ---
     project_id = parsed.get("project_id")
     if not project_id:
-        # Try to find project by name mentioned in title or description
         projects = await task_service.get_accessible_projects(session, db_user.id)
-        search_text = (parsed.get("title", "") + " " + (parsed.get("description") or "")).lower()
-        for proj in projects:
-            if proj.name.lower() in search_text:
-                project_id = proj.id
-                break
+        # 1) Try AI-detected project_name
+        ai_project_name = parsed.get("project_name")
+        if ai_project_name:
+            for proj in projects:
+                if proj.name.lower() == ai_project_name.lower():
+                    project_id = proj.id
+                    break
+        # 2) Fallback: search project name in title/description
+        if not project_id:
+            search_text = (parsed.get("title", "") + " " + (parsed.get("description") or "")).lower()
+            for proj in projects:
+                if proj.name.lower() in search_text:
+                    project_id = proj.id
+                    break
 
     # --- Create Google Calendar event for meetings ---
     calendar_event_id = None
