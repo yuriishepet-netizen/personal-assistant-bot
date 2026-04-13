@@ -1,8 +1,35 @@
 """Telegram inline keyboards for the bot."""
 
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import (
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+)
 
 from app.models.task import TaskStatus, TaskPriority
+
+
+def main_menu_keyboard() -> ReplyKeyboardMarkup:
+    """Persistent reply keyboard with main bot actions."""
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [
+                KeyboardButton(text="📋 Задачи"),
+                KeyboardButton(text="👤 Мои задачи"),
+            ],
+            [
+                KeyboardButton(text="🤖 Claude AI"),
+                KeyboardButton(text="📅 Календарь"),
+            ],
+            [
+                KeyboardButton(text="👥 Команда"),
+                KeyboardButton(text="❓ Помощь"),
+            ],
+        ],
+        resize_keyboard=True,
+        input_field_placeholder="Отправь текст, голосовое или фото...",
+    )
 
 
 def task_confirm_keyboard(temp_id: str) -> InlineKeyboardMarkup:

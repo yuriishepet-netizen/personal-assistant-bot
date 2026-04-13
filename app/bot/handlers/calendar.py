@@ -35,6 +35,7 @@ async def cmd_connect_google(message: Message, db_user: User):
 
 
 @router.message(Command("calendar"))
+@router.message(F.text == "📅 Календарь")
 async def cmd_calendar(message: Message, session: AsyncSession, db_user: User):
     """Show upcoming calendar events."""
     if not db_user.google_refresh_token:

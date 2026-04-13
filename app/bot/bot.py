@@ -6,7 +6,7 @@ import logging
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.client.default import DefaultBotProperties
-from aiogram.types import BotCommand
+from aiogram.types import BotCommand, MenuButtonCommands
 
 from app.config import get_settings
 from app.bot.middlewares import DbSessionMiddleware, AuthMiddleware
@@ -58,6 +58,7 @@ async def set_bot_commands(bot: Bot):
         BotCommand(command="help", description="❓ Помощь"),
     ]
     await bot.set_my_commands(commands)
+    await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
     logger.info("Bot commands menu set")
 
 

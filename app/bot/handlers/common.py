@@ -1,10 +1,12 @@
-"""Common handlers: /start, /help."""
+"""Common handlers: /start, /help, and reply-keyboard buttons."""
 
-from aiogram import Router
+from aiogram import Router, F
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message
+from aiogram.fsm.context import FSMContext
 
 from app.models.user import User
+from app.bot.keyboards import main_menu_keyboard
 
 router = Router()
 
@@ -22,11 +24,13 @@ async def cmd_start(message: Message, db_user: User):
         "📅 /calendar — события на неделю\n"
         "🔗 /connect_google — подключить Google Calendar\n"
         "❓ /help — помощь",
+        reply_markup=main_menu_keyboard(),
         parse_mode="HTML",
     )
 
 
 @router.message(Command("help"))
+@router.message(F.text == "❓ Помощь")
 async def cmd_help(message: Message):
     await message.answer(
         "📖 <b>Как пользоваться</b>\n\n"
@@ -44,5 +48,6 @@ async def cmd_help(message: Message):
         "/calendar — события Google Calendar\n"
         "/connect_google — подключить Google Calendar\n"
         "/team — список команды\n",
+        reply_markup=main_menu_keyboard(),
         parse_mode="HTML",
     )

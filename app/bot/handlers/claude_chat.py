@@ -20,6 +20,7 @@ class ClaudeChatStates(StatesGroup):
 
 
 @router.message(Command("ai"))
+@router.message(F.text == "🤖 Claude AI")
 async def cmd_ai(message: Message, state: FSMContext, db_user: User):
     """Enter Claude AI chat mode."""
     await state.set_state(ClaudeChatStates.chatting)

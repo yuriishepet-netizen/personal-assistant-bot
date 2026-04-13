@@ -82,12 +82,20 @@ def _format_task_list_item(task) -> str:
 # --- Text message handler (AI task parsing) ---
 
 
+# Reply-keyboard button texts to ignore in AI parser
+_MENU_BUTTONS = {"📋 Задачи", "👤 Мои задачи", "🤖 Claude AI", "📅 Календарь", "👥 Команда", "❓ Помощь"}
+
+
 @router.message(F.text, ~F.text.startswith("/"))
 async def handle_text_message(message: Message, session: AsyncSession, db_user: User, state: FSMContext):
     """Parse text message and suggest creating a task or meeting."""
     current_state = await state.get_state()
     if current_state:
         return  # Let FSM handlers process this
+
+    # Don't parse reply-keyboard button presses as tasks
+    if message.text in _MENU_BUTTONS:
+        return
 
     await message.answer("🤖 Анализирую...")
 
@@ -354,11 +362,13 @@ async def go_back(callback: CallbackQuery):
 
 
 @router.message(Command("tasks"))
+@router.message(F.text == "📋 Задачи")
 async def cmd_tasks(message: Message, session: AsyncSession):
     await message.answer("📋 <b>Задачи</b>\nВыбери фильтр:", reply_markup=tasks_filter_keyboard(), parse_mode="HTML")
 
 
 @router.message(Command("my"))
+@router.message(F.text == "👤 Мои задачи")
 async def cmd_my_tasks(message: Message, session: AsyncSession, db_user: User):
     tasks = await task_service.get_tasks(session, assignee_id=db_user.id, current_user_id=db_user.id)
     if not tasks:
@@ -545,6 +555,7 @@ async def cancel_delete_task(callback: CallbackQuery, db_user: User):
 
 
 @router.message(Command("team"))
+@router.message(F.text == "👥 Команда")
 async def cmd_team(message: Message, session: AsyncSession):
     users = await user_service.get_all_users(session)
     if not users:
