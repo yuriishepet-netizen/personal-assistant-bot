@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     # Google Gemini
     GEMINI_API_KEY: str
 
+    # Claude (Anthropic)
+    ANTHROPIC_API_KEY: str = ""
+
     # Google Calendar OAuth
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""

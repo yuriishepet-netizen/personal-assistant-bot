@@ -5,7 +5,7 @@ import uuid
 
 from aiogram import Router, F
 from aiogram.filters import Command
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -376,29 +376,76 @@ async def filter_tasks(callback: CallbackQuery, session: AsyncSession, db_user: 
     filter_value = callback.data.split(":")[1]
 
     if filter_value == "all":
-        tasks = await task_service.get_tasks(session, current_user_id=db_user.id)
+        task_list = await task_service.get_tasks(session, current_user_id=db_user.id)
         title = "📋 Все задачи"
     elif filter_value == "my":
-        tasks = await task_service.get_tasks(session, assignee_id=db_user.id, current_user_id=db_user.id)
+        task_list = await task_service.get_tasks(session, assignee_id=db_user.id, current_user_id=db_user.id)
         title = "👤 Мои задачи"
     else:
         status = TaskStatus(filter_value)
-        tasks = await task_service.get_tasks(session, status=status, current_user_id=db_user.id)
+        task_list = await task_service.get_tasks(session, status=status, current_user_id=db_user.id)
         title = f"📋 Задачи: {filter_value}"
 
-    if not tasks:
+    if not task_list:
         await callback.message.edit_text(f"{title}\n\n📭 Нет задач.", parse_mode="HTML")
         await callback.answer()
         return
 
     lines = [f"<b>{title}</b>\n"]
-    for t in tasks[:20]:
+    for t in task_list[:20]:
         lines.append(_format_task_list_item(t))
 
-    if len(tasks) > 20:
-        lines.append(f"\n... и ещё {len(tasks) - 20}")
+    if len(task_list) > 20:
+        lines.append(f"\n... и ещё {len(task_list) - 20}")
 
-    await callback.message.edit_text("\n".join(lines), parse_mode="HTML")
+    # Add inline buttons for quick task access (first 8 tasks)
+    task_buttons = []
+    for t in task_list[:8]:
+        task_buttons.append([InlineKeyboardButton(
+            text=f"#{t.id} {t.title[:30]}",
+            callback_data=f"task_detail:{t.id}",
+        )])
+    kb = InlineKeyboardMarkup(inline_keyboard=task_buttons) if task_buttons else None
+
+    await callback.message.edit_text("\n".join(lines), reply_markup=kb, parse_mode="HTML")
+    await callback.answer()
+
+
+# --- Task detail (from task list) ---
+
+
+@router.callback_query(F.data.startswith("task_detail:"))
+async def task_detail(callback: CallbackQuery, session: AsyncSession, db_user: User):
+    """Show task details with action buttons."""
+    task_id = int(callback.data.split(":")[1])
+    task = await task_service.get_task(session, task_id)
+    if not task:
+        await callback.answer("Задача не найдена")
+        return
+
+    status_emoji = {"backlog": "📋", "in_progress": "🔄", "review": "👀", "done": "✅"}
+    priority_emoji = {"low": "🟢", "medium": "🟡", "high": "🟠", "critical": "🔴"}
+    s = status_emoji.get(task.status.value, "⚪")
+    p = priority_emoji.get(task.priority.value, "⚪")
+
+    lines = [
+        f"{s}{p} <b>#{task.id} {task.title}</b>\n",
+    ]
+    if task.description:
+        lines.append(f"📄 {task.description}\n")
+    lines.append(f"📊 Статус: <b>{task.status.value}</b>")
+    lines.append(f"🔺 Приоритет: <b>{task.priority.value}</b>")
+    if task.assignee:
+        lines.append(f"👤 Ответственный: {task.assignee.name}")
+    if task.deadline:
+        lines.append(f"📅 Дедлайн: {task.deadline.strftime('%d.%m.%Y %H:%M')}")
+    if task.project:
+        lines.append(f"📁 Проект: {task.project.name}")
+
+    is_admin = db_user.role == UserRole.ADMIN
+    kb = task_actions_keyboard(task_id, is_admin=is_admin)
+
+    await callback.message.edit_text("\n".join(lines), reply_markup=kb, parse_mode="HTML")
     await callback.answer()
 
 
