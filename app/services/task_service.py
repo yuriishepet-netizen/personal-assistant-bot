@@ -8,6 +8,8 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from sqlalchemy import or_
+
 from app.models.task import Task, TaskStatus, TaskPriority
 from app.models.comment import Comment
 from app.models.attachment import Attachment
@@ -143,6 +145,26 @@ async def add_attachment(
     await session.commit()
     await session.refresh(attachment)
     return attachment
+
+
+async def get_accessible_projects(session: AsyncSession, user_id: int) -> list[Project]:
+    """Get all projects accessible to a user (public + private where member)."""
+    accessible_private = (
+        select(project_members.c.project_id)
+        .where(project_members.c.user_id == user_id)
+    )
+    query = (
+        select(Project)
+        .where(
+            or_(
+                Project.is_private == False,  # noqa: E712
+                Project.id.in_(accessible_private),
+            )
+        )
+        .order_by(Project.name)
+    )
+    result = await session.execute(query)
+    return list(result.scalars().all())
 
 
 async def get_tasks_with_upcoming_deadlines(session: AsyncSession, before: datetime) -> list[Task]:

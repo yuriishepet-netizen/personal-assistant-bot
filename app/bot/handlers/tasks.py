@@ -4,7 +4,7 @@ import logging
 import uuid
 
 from aiogram import Router, F
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -23,10 +23,33 @@ from app.bot.keyboards import (
     task_actions_keyboard,
     delete_confirm_keyboard,
     users_keyboard,
+    projects_keyboard,
 )
 
 logger = logging.getLogger(__name__)
 router = Router()
+
+# --- Translation dicts ---
+
+STATUS_LABELS = {
+    "backlog": "📋 Бэклог",
+    "in_progress": "🔄 В работе",
+    "review": "👀 На проверке",
+    "done": "✅ Готово",
+}
+
+PRIORITY_LABELS = {
+    "low": "🟢 Низкий",
+    "medium": "🟡 Средний",
+    "high": "🟠 Высокий",
+    "critical": "🔴 Критический",
+}
+
+# Reply-keyboard button texts — must be excluded from AI parser
+_MENU_BUTTONS = frozenset({
+    "📋 Задачи", "👤 Мои задачи", "🤖 Claude AI",
+    "📅 Календарь", "👥 Команда", "❓ Помощь",
+})
 
 
 class TaskEditStates(StatesGroup):
@@ -58,6 +81,8 @@ def _format_task_card(parsed) -> str:
         lines.append(f"👤 Ответственный: {parsed.assignee_name}")
     if is_meeting and parsed.meeting_participants:
         lines.append(f"👥 Участники: {', '.join(parsed.meeting_participants)}")
+    if hasattr(parsed, "project_name") and parsed.project_name:
+        lines.append(f"📁 Проект: {parsed.project_name}")
     lines.append(f"\n🤖 Уверенность AI: {int(parsed.confidence * 100)}%")
 
     return "\n".join(lines)
@@ -82,21 +107,14 @@ def _format_task_list_item(task) -> str:
 # --- Text message handler (AI task parsing) ---
 
 
-# Reply-keyboard button texts to ignore in AI parser
-_MENU_BUTTONS = {"📋 Задачи", "👤 Мои задачи", "🤖 Claude AI", "📅 Календарь", "👥 Команда", "❓ Помощь"}
-
-
-@router.message(F.text, ~F.text.startswith("/"))
+@router.message(F.text, ~F.text.startswith("/"), ~F.text.in_(_MENU_BUTTONS), StateFilter(None))
 async def handle_text_message(message: Message, session: AsyncSession, db_user: User, state: FSMContext):
-    """Parse text message and suggest creating a task or meeting."""
-    current_state = await state.get_state()
-    if current_state:
-        return  # Let FSM handlers process this
+    """Parse text message and suggest creating a task or meeting.
 
-    # Don't parse reply-keyboard button presses as tasks
-    if message.text in _MENU_BUTTONS:
-        return
-
+    Filters ensure this only fires when:
+    - message is text (not command, not menu button)
+    - no FSM state is active (so FSM handlers get priority)
+    """
     await message.answer("🤖 Анализирую...")
 
     try:
@@ -190,6 +208,8 @@ async def confirm_task(callback: CallbackQuery, session: AsyncSession, db_user: 
                 logger.error("Failed to create calendar event: %s", e)
                 # Continue creating the task even if calendar fails
 
+    project_id = parsed.get("project_id")
+
     task = await task_service.create_task(
         session=session,
         title=parsed["title"],
@@ -199,6 +219,7 @@ async def confirm_task(callback: CallbackQuery, session: AsyncSession, db_user: 
         assignee_id=assignee_id,
         deadline=deadline or meeting_time,
         calendar_event_id=calendar_event_id,
+        project_id=project_id,
     )
 
     is_admin = db_user.role == UserRole.ADMIN
@@ -311,6 +332,41 @@ async def set_assignee(callback: CallbackQuery, session: AsyncSession, state: FS
     await callback.answer(f"Ответственный: {user.name}" if user else "Пользователь не найден")
 
 
+# --- Edit project ---
+
+
+@router.callback_query(F.data.startswith("edit_project:"))
+async def edit_project(callback: CallbackQuery, session: AsyncSession, db_user: User):
+    temp_id = callback.data.split(":")[1]
+    projects = await task_service.get_accessible_projects(session, db_user.id)
+    await callback.message.edit_reply_markup(reply_markup=projects_keyboard(projects, temp_id))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("set_project:"))
+async def set_project(callback: CallbackQuery, session: AsyncSession, state: FSMContext):
+    parts = callback.data.split(":")
+    temp_id, project_id = parts[1], int(parts[2])
+    data = await state.get_data()
+    parsed = data.get(f"parsed_{temp_id}")
+    if parsed:
+        if project_id == 0:
+            parsed["project_id"] = None
+            parsed["project_name"] = None
+        else:
+            parsed["project_id"] = project_id
+            # Get project name for display
+            from app.models.project import Project
+            from sqlalchemy import select
+            result = await session.execute(select(Project).where(Project.id == project_id))
+            project = result.scalar_one_or_none()
+            parsed["project_name"] = project.name if project else None
+        await state.update_data({f"parsed_{temp_id}": parsed})
+    await callback.message.edit_reply_markup(reply_markup=task_confirm_keyboard(temp_id))
+    project_name = parsed.get("project_name") if parsed else None
+    await callback.answer(f"Проект: {project_name}" if project_name else "Без проекта")
+
+
 # --- Edit deadline ---
 
 
@@ -394,7 +450,7 @@ async def filter_tasks(callback: CallbackQuery, session: AsyncSession, db_user: 
     else:
         status = TaskStatus(filter_value)
         task_list = await task_service.get_tasks(session, status=status, current_user_id=db_user.id)
-        title = f"📋 Задачи: {filter_value}"
+        title = f"📋 Задачи: {STATUS_LABELS.get(filter_value, filter_value)}"
 
     if not task_list:
         await callback.message.edit_text(f"{title}\n\n📭 Нет задач.", parse_mode="HTML")
@@ -433,18 +489,16 @@ async def task_detail(callback: CallbackQuery, session: AsyncSession, db_user: U
         await callback.answer("Задача не найдена")
         return
 
-    status_emoji = {"backlog": "📋", "in_progress": "🔄", "review": "👀", "done": "✅"}
-    priority_emoji = {"low": "🟢", "medium": "🟡", "high": "🟠", "critical": "🔴"}
-    s = status_emoji.get(task.status.value, "⚪")
-    p = priority_emoji.get(task.priority.value, "⚪")
+    s_label = STATUS_LABELS.get(task.status.value, task.status.value)
+    p_label = PRIORITY_LABELS.get(task.priority.value, task.priority.value)
 
     lines = [
-        f"{s}{p} <b>#{task.id} {task.title}</b>\n",
+        f"<b>#{task.id} {task.title}</b>\n",
     ]
     if task.description:
         lines.append(f"📄 {task.description}\n")
-    lines.append(f"📊 Статус: <b>{task.status.value}</b>")
-    lines.append(f"🔺 Приоритет: <b>{task.priority.value}</b>")
+    lines.append(f"📊 Статус: <b>{s_label}</b>")
+    lines.append(f"🔺 Приоритет: <b>{p_label}</b>")
     if task.assignee:
         lines.append(f"👤 Ответственный: {task.assignee.name}")
     if task.deadline:
@@ -477,8 +531,9 @@ async def change_status(callback: CallbackQuery, session: AsyncSession, db_user:
     task = await task_service.update_task(session, task_id, status=TaskStatus(new_status))
     if task:
         is_admin = db_user.role == UserRole.ADMIN
+        status_label = STATUS_LABELS.get(new_status, new_status)
         await callback.message.edit_text(
-            f"✅ Статус задачи <b>#{task.id}</b> изменён на <b>{new_status}</b>",
+            f"✅ Статус задачи <b>#{task.id}</b> изменён на <b>{status_label}</b>",
             reply_markup=task_actions_keyboard(task_id, is_admin=is_admin),
             parse_mode="HTML",
         )

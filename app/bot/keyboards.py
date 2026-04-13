@@ -40,11 +40,12 @@ def task_confirm_keyboard(temp_id: str) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="❌ Отменить", callback_data=f"cancel:{temp_id}"),
         ],
         [
-            InlineKeyboardButton(text="📅 Изменить дедлайн", callback_data=f"edit_deadline:{temp_id}"),
-            InlineKeyboardButton(text="👤 Изменить ответственного", callback_data=f"edit_assignee:{temp_id}"),
+            InlineKeyboardButton(text="📅 Дедлайн", callback_data=f"edit_deadline:{temp_id}"),
+            InlineKeyboardButton(text="👤 Ответственный", callback_data=f"edit_assignee:{temp_id}"),
         ],
         [
-            InlineKeyboardButton(text="🔺 Изменить приоритет", callback_data=f"edit_priority:{temp_id}"),
+            InlineKeyboardButton(text="🔺 Приоритет", callback_data=f"edit_priority:{temp_id}"),
+            InlineKeyboardButton(text="📁 Проект", callback_data=f"edit_project:{temp_id}"),
         ],
     ])
 
@@ -86,6 +87,17 @@ def users_keyboard(users: list, temp_id: str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=f"👤 {u.name}", callback_data=f"assignee:{temp_id}:{u.id}")]
         for u in users
     ]
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=f"back:{temp_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def projects_keyboard(projects: list, temp_id: str) -> InlineKeyboardMarkup:
+    """Keyboard for selecting a project."""
+    buttons = [
+        [InlineKeyboardButton(text=f"📁 {p.name}", callback_data=f"set_project:{temp_id}:{p.id}")]
+        for p in projects
+    ]
+    buttons.append([InlineKeyboardButton(text="🚫 Без проекта", callback_data=f"set_project:{temp_id}:0")])
     buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=f"back:{temp_id}")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
