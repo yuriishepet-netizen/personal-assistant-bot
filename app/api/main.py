@@ -13,6 +13,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://agile-calendar-hub.lovable.app",
+        "https://preview--agile-calendar-hub.lovable.app",
         "http://localhost:5173",
         "http://localhost:3000",
     ],
