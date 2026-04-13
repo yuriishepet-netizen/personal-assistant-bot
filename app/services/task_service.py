@@ -11,7 +11,7 @@ from sqlalchemy.orm import selectinload
 from app.models.task import Task, TaskStatus, TaskPriority
 from app.models.comment import Comment
 from app.models.attachment import Attachment
-from app.models.project import Project  # noqa: F401
+from app.models.project import Project, project_members  # noqa: F401
 
 
 async def create_task(
@@ -64,6 +64,7 @@ async def get_tasks(
     assignee_id: int | None = None,
     priority: TaskPriority | None = None,
     project_id: int | None = None,
+    current_user_id: int | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> list[Task]:
@@ -81,6 +82,24 @@ async def get_tasks(
         query = query.where(Task.priority == priority)
     if project_id:
         query = query.where(Task.project_id == project_id)
+
+    # Filter out tasks from private projects the user doesn't have access to
+    if current_user_id is not None:
+        accessible_private = (
+            select(project_members.c.project_id)
+            .where(project_members.c.user_id == current_user_id)
+        )
+        private_project_ids = (
+            select(Project.id).where(Project.is_private == True)  # noqa: E712
+        )
+        # Exclude tasks from private projects unless user is a member
+        query = query.where(
+            ~(
+                Task.project_id.in_(private_project_ids)
+                & ~Task.project_id.in_(accessible_private)
+            )
+            | Task.project_id.is_(None)
+        )
 
     query = query.order_by(Task.created_at.desc()).limit(limit).offset(offset)
     result = await session.execute(query)

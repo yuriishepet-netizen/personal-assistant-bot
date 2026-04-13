@@ -360,7 +360,7 @@ async def cmd_tasks(message: Message, session: AsyncSession):
 
 @router.message(Command("my"))
 async def cmd_my_tasks(message: Message, session: AsyncSession, db_user: User):
-    tasks = await task_service.get_tasks(session, assignee_id=db_user.id)
+    tasks = await task_service.get_tasks(session, assignee_id=db_user.id, current_user_id=db_user.id)
     if not tasks:
         await message.answer("📭 У тебя нет задач.")
         return
@@ -376,14 +376,14 @@ async def filter_tasks(callback: CallbackQuery, session: AsyncSession, db_user: 
     filter_value = callback.data.split(":")[1]
 
     if filter_value == "all":
-        tasks = await task_service.get_tasks(session)
+        tasks = await task_service.get_tasks(session, current_user_id=db_user.id)
         title = "📋 Все задачи"
     elif filter_value == "my":
-        tasks = await task_service.get_tasks(session, assignee_id=db_user.id)
+        tasks = await task_service.get_tasks(session, assignee_id=db_user.id, current_user_id=db_user.id)
         title = "👤 Мои задачи"
     else:
         status = TaskStatus(filter_value)
-        tasks = await task_service.get_tasks(session, status=status)
+        tasks = await task_service.get_tasks(session, status=status, current_user_id=db_user.id)
         title = f"📋 Задачи: {filter_value}"
 
     if not tasks:

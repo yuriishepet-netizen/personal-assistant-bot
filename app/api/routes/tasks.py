@@ -101,7 +101,10 @@ async def list_tasks(
     session: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ):
-    tasks = await task_service.get_tasks(session, status=status, assignee_id=assignee_id, priority=priority, project_id=project_id, limit=limit, offset=offset)
+    tasks = await task_service.get_tasks(
+        session, status=status, assignee_id=assignee_id, priority=priority,
+        project_id=project_id, current_user_id=current_user.id, limit=limit, offset=offset,
+    )
     return [_task_to_response(t) for t in tasks]
 
 
