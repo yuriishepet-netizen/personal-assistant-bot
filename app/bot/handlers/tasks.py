@@ -59,6 +59,46 @@ class TaskEditStates(StatesGroup):
     waiting_rework_feedback = State()
 
 
+def _dict_to_parsed(d: dict):
+    """Rebuild a ParsedTask-like object from the dict we store in FSM state."""
+    from datetime import datetime as _dt
+    from app.services.ai_parser import ParsedTask as _PT
+
+    def _p(s):
+        if not s:
+            return None
+        try:
+            return _dt.fromisoformat(s)
+        except (ValueError, TypeError):
+            return None
+
+    return _PT(
+        type=d.get("type", "task"),
+        title=d.get("title", ""),
+        description=d.get("description"),
+        deadline=_p(d.get("deadline")),
+        priority=d.get("priority"),
+        assignee_name=d.get("assignee_name"),
+        project_name=d.get("project_name"),
+        meeting_time=_p(d.get("meeting_time")),
+        meeting_participants=d.get("meeting_participants"),
+        confidence=d.get("confidence", 0.0),
+    )
+
+
+async def _refresh_task_card(callback: "CallbackQuery", temp_id: str, parsed_dict: dict) -> None:
+    """Re-render the task-draft card in place so the user sees the update."""
+    try:
+        await callback.message.edit_text(
+            _format_task_card(_dict_to_parsed(parsed_dict)),
+            reply_markup=task_confirm_keyboard(temp_id),
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        # Aiogram raises if the message text/markup is identical — safe to ignore.
+        logger.debug("edit_text skipped: %s", e)
+
+
 def _format_task_card(parsed) -> str:
     """Format a parsed task as a Telegram message."""
     priority_map = {"low": "🟢", "medium": "🟡", "high": "🟠", "critical": "🔴"}
@@ -352,7 +392,9 @@ async def set_priority(callback: CallbackQuery, state: FSMContext):
     if parsed:
         parsed["priority"] = priority
         await state.update_data({f"parsed_{temp_id}": parsed})
-    await callback.message.edit_reply_markup(reply_markup=task_confirm_keyboard(temp_id))
+        await _refresh_task_card(callback, temp_id, parsed)
+    else:
+        await callback.message.edit_reply_markup(reply_markup=task_confirm_keyboard(temp_id))
     await callback.answer(f"Приоритет: {priority}")
 
 
@@ -377,7 +419,9 @@ async def set_assignee(callback: CallbackQuery, session: AsyncSession, state: FS
     if parsed and user:
         parsed["assignee_name"] = user.name
         await state.update_data({f"parsed_{temp_id}": parsed})
-    await callback.message.edit_reply_markup(reply_markup=task_confirm_keyboard(temp_id))
+        await _refresh_task_card(callback, temp_id, parsed)
+    else:
+        await callback.message.edit_reply_markup(reply_markup=task_confirm_keyboard(temp_id))
     await callback.answer(f"Ответственный: {user.name}" if user else "Пользователь не найден")
 
 
@@ -411,7 +455,9 @@ async def set_project(callback: CallbackQuery, session: AsyncSession, state: FSM
             project = result.scalar_one_or_none()
             parsed["project_name"] = project.name if project else None
         await state.update_data({f"parsed_{temp_id}": parsed})
-    await callback.message.edit_reply_markup(reply_markup=task_confirm_keyboard(temp_id))
+        await _refresh_task_card(callback, temp_id, parsed)
+    else:
+        await callback.message.edit_reply_markup(reply_markup=task_confirm_keyboard(temp_id))
     project_name = parsed.get("project_name") if parsed else None
     await callback.answer(f"Проект: {project_name}" if project_name else "Без проекта")
 
@@ -422,7 +468,12 @@ async def set_project(callback: CallbackQuery, session: AsyncSession, state: FSM
 @router.callback_query(F.data.startswith("edit_deadline:"))
 async def edit_deadline(callback: CallbackQuery, state: FSMContext):
     temp_id = callback.data.split(":")[1]
-    await state.update_data(editing_deadline_for=temp_id)
+    # Remember the card message so we can edit it in place once the user replies.
+    await state.update_data(
+        editing_deadline_for=temp_id,
+        deadline_card_chat_id=callback.message.chat.id,
+        deadline_card_message_id=callback.message.message_id,
+    )
     await state.set_state(TaskEditStates.waiting_deadline)
     await callback.message.answer("📅 Введи новый дедлайн (напр. «завтра в 18:00» или «15.04.2026 14:00»):")
     await callback.answer()
@@ -445,11 +496,24 @@ async def process_deadline_input(message: Message, state: FSMContext):
         if parsed:
             parsed["deadline"] = deadline.isoformat()
             await state.update_data({f"parsed_{temp_id}": parsed})
+            # Edit the original card in place so the user sees the change applied.
+            chat_id = data.get("deadline_card_chat_id")
+            msg_id = data.get("deadline_card_message_id")
+            if chat_id and msg_id:
+                try:
+                    await message.bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=msg_id,
+                        text=_format_task_card(_dict_to_parsed(parsed)),
+                        reply_markup=task_confirm_keyboard(temp_id),
+                        parse_mode="HTML",
+                    )
+                except Exception as e:
+                    logger.debug("deadline card edit skipped: %s", e)
 
     await state.set_state(None)
     await message.answer(
-        f"📅 Дедлайн обновлён: {deadline.strftime('%d.%m.%Y %H:%M') if deadline else 'не определён'}",
-        reply_markup=task_confirm_keyboard(temp_id) if temp_id else None,
+        f"📅 Дедлайн обновлён: {deadline.strftime('%d.%m.%Y %H:%M') if deadline else 'не определён'}"
     )
 
 
