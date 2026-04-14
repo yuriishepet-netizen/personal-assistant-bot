@@ -32,7 +32,7 @@ router = Router()
 # --- Translation dicts ---
 
 STATUS_LABELS = {
-    "backlog": "📋 Бэклог",
+    "backlog": "📋 Список задач",
     "in_progress": "🔄 В работе",
     "review": "👀 На проверке",
     "done": "✅ Готово",
@@ -239,7 +239,9 @@ async def confirm_task(callback: CallbackQuery, session: AsyncSession, db_user: 
                 logger.error("Failed to create calendar event: %s", e)
                 # Continue creating the task even if calendar fails
 
-    project_id = parsed.get("project_id")
+    # Use already-detected project_id (from lines above); only override if user explicitly set it
+    if parsed.get("project_id") is not None:
+        project_id = parsed["project_id"]
 
     task = await task_service.create_task(
         session=session,

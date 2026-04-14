@@ -8,7 +8,7 @@ import logging
 import re
 import base64
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 import aiohttp
 
@@ -42,6 +42,7 @@ TASK_EXTRACTION_PROMPT = """Ты — AI-ассистент для извлече
 - Если пользователь просит создать встречу/звонок/созвон — type = "meeting"
 - Если это задача/дело/поручение — type = "task"
 - Дедлайн извлекай из контекста ("завтра", "до пятницы", "к 15 апреля", "четверг 10:00")
+- ВАЖНО: при расчёте дня недели ("четверг", "пятница") используй ТОЧНО текущую дату и день недели ниже. Если сегодня {day_of_week} {current_date}, то "четверг" = ближайший четверг ПОСЛЕ текущей даты.
 - Приоритет определяй по срочности слов ("срочно"="high", "критично"="critical", "когда будет время"="low")
 - assignee_name ДОЛЖЕН точно совпадать с одним из имён команды (учитывай падежи и сокращения: "Зоряну"→"Зоряна", "Юре"→"Yurii Shepet", "Гриша"→ищи в списке)
 - project_name ДОЛЖЕН точно совпадать с одним из проектов (учитывай падежи: "Вдало"→"Вдало")
@@ -114,6 +115,26 @@ def _parse_datetime(value: str | None) -> datetime | None:
         return datetime.fromisoformat(value)
     except (ValueError, TypeError):
         return None
+
+
+def _get_tz_offset(tz_name: str) -> int:
+    """Get UTC offset in hours for a timezone name. Defaults to +3 (EEST summer)."""
+    # Note: Ukraine uses EET (UTC+2) in winter and EEST (UTC+3) in summer.
+    # Since DST handling is complex, we approximate based on current month.
+    now = datetime.now(timezone.utc)
+    month = now.month
+    # Ukraine DST: last Sunday of March → last Sunday of October
+    is_summer = 4 <= month <= 10  # approximate
+    tz_map_winter = {
+        "Europe/Kiev": 2, "Europe/Kyiv": 2, "EET": 2,
+        "Europe/Moscow": 3, "UTC": 0, "US/Eastern": -5,
+    }
+    tz_map_summer = {
+        "Europe/Kiev": 3, "Europe/Kyiv": 3, "EET": 3,
+        "Europe/Moscow": 3, "UTC": 0, "US/Eastern": -4,
+    }
+    tz_map = tz_map_summer if is_summer else tz_map_winter
+    return tz_map.get(tz_name, 3 if is_summer else 2)
 
 
 _RETRYABLE_STATUSES = {429, 500, 502, 503}
@@ -243,8 +264,18 @@ async def parse_text(
     if project_names:
         projects_ctx = f"- Проекты: {', '.join(project_names)}"
 
+    # Use user's local time (based on TIMEZONE setting) for accurate day-of-week resolution
+    tz_offset = _get_tz_offset(settings.TIMEZONE)
+    local_now = datetime.now(timezone(timedelta(hours=tz_offset)))
+    day_names_ru = {
+        0: "понедельник", 1: "вторник", 2: "среда", 3: "четверг",
+        4: "пятница", 5: "суббота", 6: "воскресенье",
+    }
+    day_of_week = day_names_ru.get(local_now.weekday(), "")
+
     prompt = TASK_EXTRACTION_PROMPT.format(
-        current_date=datetime.now().strftime("%Y-%m-%d %H:%M"),
+        current_date=local_now.strftime("%Y-%m-%d %H:%M"),
+        day_of_week=day_of_week,
         timezone=settings.TIMEZONE,
         team_context=team_ctx,
         projects_context=projects_ctx,
@@ -287,8 +318,17 @@ async def parse_image(
     if project_names:
         projects_ctx = f"- Проекты: {', '.join(project_names)}"
 
+    tz_offset = _get_tz_offset(settings.TIMEZONE)
+    local_now = datetime.now(timezone(timedelta(hours=tz_offset)))
+    day_names_ru = {
+        0: "понедельник", 1: "вторник", 2: "среда", 3: "четверг",
+        4: "пятница", 5: "суббота", 6: "воскресенье",
+    }
+    day_of_week = day_names_ru.get(local_now.weekday(), "")
+
     prompt = TASK_EXTRACTION_PROMPT.format(
-        current_date=datetime.now().strftime("%Y-%m-%d %H:%M"),
+        current_date=local_now.strftime("%Y-%m-%d %H:%M"),
+        day_of_week=day_of_week,
         timezone=settings.TIMEZONE,
         team_context=team_ctx,
         projects_context=projects_ctx,
