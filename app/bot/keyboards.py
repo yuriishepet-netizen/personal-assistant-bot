@@ -112,12 +112,35 @@ def task_actions_keyboard(task_id: int, is_admin: bool = True) -> InlineKeyboard
             InlineKeyboardButton(text="📊 Статус", callback_data=f"show_status:{task_id}"),
             InlineKeyboardButton(text="💬 Комментарий", callback_data=f"comment:{task_id}"),
         ],
+        [
+            InlineKeyboardButton(text="📝 Все комментарии", callback_data=f"comments_list:{task_id}"),
+        ],
     ]
     second_row = [InlineKeyboardButton(text="📎 Файлы", callback_data=f"attachments:{task_id}")]
     if is_admin:
         second_row.append(InlineKeyboardButton(text="🗑 Удалить", callback_data=f"delete_ask:{task_id}"))
     rows.append(second_row)
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def comment_actions_keyboard(task_id: int, comment_id: int, can_edit: bool, can_delete: bool) -> InlineKeyboardMarkup:
+    """Inline buttons under a single comment: edit / delete."""
+    row = []
+    if can_edit:
+        row.append(InlineKeyboardButton(text="✏️ Править", callback_data=f"comment_edit:{task_id}:{comment_id}"))
+    if can_delete:
+        row.append(InlineKeyboardButton(text="🗑 Удалить", callback_data=f"comment_del_ask:{task_id}:{comment_id}"))
+    return InlineKeyboardMarkup(inline_keyboard=[row] if row else [])
+
+
+def comment_delete_confirm_keyboard(task_id: int, comment_id: int) -> InlineKeyboardMarkup:
+    """Confirm deletion of a single comment."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🗑 Да, удалить", callback_data=f"comment_del_yes:{task_id}:{comment_id}"),
+            InlineKeyboardButton(text="⬅️ Отмена", callback_data=f"comment_del_no:{task_id}:{comment_id}"),
+        ],
+    ])
 
 
 def delete_confirm_keyboard(task_id: int) -> InlineKeyboardMarkup:

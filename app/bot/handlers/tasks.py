@@ -24,6 +24,8 @@ from app.bot.keyboards import (
     delete_confirm_keyboard,
     users_keyboard,
     projects_keyboard,
+    comment_actions_keyboard,
+    comment_delete_confirm_keyboard,
 )
 
 logger = logging.getLogger(__name__)
@@ -57,6 +59,7 @@ class TaskEditStates(StatesGroup):
     waiting_deadline = State()
     waiting_comment = State()
     waiting_rework_feedback = State()
+    waiting_comment_edit = State()
 
 
 def _dict_to_parsed(d: dict):
@@ -842,6 +845,151 @@ async def process_comment(message: Message, session: AsyncSession, db_user: User
         await task_service.add_comment(session, task_id, db_user.id, message.text)
         await message.answer(f"💬 Комментарий добавлен к задаче #{task_id}")
     await state.set_state(None)
+
+
+def _format_comment_line(c) -> str:
+    author = c.user.name if c.user else "?"
+    ts = c.created_at.strftime("%d.%m %H:%M") if c.created_at else ""
+    # Escape HTML-unsafe chars to be safe when parse_mode=HTML.
+    text = (c.text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return f"<b>#{c.id}</b> • {author} • {ts}\n{text}"
+
+
+@router.callback_query(F.data.startswith("comments_list:"))
+async def show_comments_list(callback: CallbackQuery, session: AsyncSession, db_user: User):
+    """Show all comments for a task with edit/delete buttons per comment."""
+    task_id = int(callback.data.split(":")[1])
+    task = await task_service.get_task(session, task_id)
+    if not task:
+        await callback.answer("Задача не найдена", show_alert=True)
+        return
+
+    if not task.comments:
+        await callback.message.answer(f"💬 У задачи #{task_id} пока нет комментариев.")
+        await callback.answer()
+        return
+
+    is_admin = db_user.role == UserRole.ADMIN
+    await callback.message.answer(f"💬 Комментарии к задаче #{task_id}:")
+    for c in task.comments:
+        can_edit = c.user_id == db_user.id
+        can_delete = c.user_id == db_user.id or is_admin
+        await callback.message.answer(
+            _format_comment_line(c),
+            reply_markup=comment_actions_keyboard(task_id, c.id, can_edit, can_delete),
+            parse_mode="HTML",
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("comment_edit:"))
+async def ask_edit_comment(callback: CallbackQuery, session: AsyncSession, db_user: User, state: FSMContext):
+    _, task_id_s, comment_id_s = callback.data.split(":")
+    comment_id = int(comment_id_s)
+    comment = await task_service.get_comment(session, comment_id)
+    if not comment:
+        await callback.answer("Комментарий не найден", show_alert=True)
+        return
+    if comment.user_id != db_user.id:
+        await callback.answer("⛔ Можно править только свои комментарии", show_alert=True)
+        return
+    await state.update_data(
+        editing_comment_id=comment_id,
+        editing_comment_card_chat_id=callback.message.chat.id,
+        editing_comment_card_message_id=callback.message.message_id,
+    )
+    await state.set_state(TaskEditStates.waiting_comment_edit)
+    await callback.message.answer(f"✏️ Пришли новый текст комментария #{comment_id}:")
+    await callback.answer()
+
+
+@router.message(TaskEditStates.waiting_comment_edit)
+async def process_edit_comment(message: Message, session: AsyncSession, db_user: User, state: FSMContext):
+    data = await state.get_data()
+    comment_id = data.get("editing_comment_id")
+    if not comment_id:
+        await state.set_state(None)
+        return
+    comment = await task_service.get_comment(session, comment_id)
+    if not comment or comment.user_id != db_user.id:
+        await message.answer("⛔ Нельзя редактировать этот комментарий.")
+        await state.set_state(None)
+        return
+    updated = await task_service.update_comment(session, comment_id, message.text)
+    await state.set_state(None)
+    # Update the original comment card in place if we remembered it.
+    chat_id = data.get("editing_comment_card_chat_id")
+    msg_id = data.get("editing_comment_card_message_id")
+    if chat_id and msg_id and updated:
+        try:
+            await message.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=msg_id,
+                text=_format_comment_line(updated),
+                reply_markup=comment_actions_keyboard(
+                    updated.task_id, updated.id, can_edit=True, can_delete=True
+                ),
+                parse_mode="HTML",
+            )
+        except Exception as e:
+            logger.debug("comment card edit skipped: %s", e)
+    await message.answer(f"✅ Комментарий #{comment_id} обновлён.")
+
+
+@router.callback_query(F.data.startswith("comment_del_ask:"))
+async def ask_delete_comment(callback: CallbackQuery, session: AsyncSession, db_user: User):
+    _, task_id_s, comment_id_s = callback.data.split(":")
+    task_id, comment_id = int(task_id_s), int(comment_id_s)
+    comment = await task_service.get_comment(session, comment_id)
+    if not comment:
+        await callback.answer("Комментарий не найден", show_alert=True)
+        return
+    is_admin = db_user.role == UserRole.ADMIN
+    if comment.user_id != db_user.id and not is_admin:
+        await callback.answer("⛔ Можно удалять только свои комментарии", show_alert=True)
+        return
+    await callback.message.edit_reply_markup(
+        reply_markup=comment_delete_confirm_keyboard(task_id, comment_id)
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("comment_del_yes:"))
+async def confirm_delete_comment(callback: CallbackQuery, session: AsyncSession, db_user: User):
+    _, task_id_s, comment_id_s = callback.data.split(":")
+    comment_id = int(comment_id_s)
+    comment = await task_service.get_comment(session, comment_id)
+    if not comment:
+        await callback.answer("Уже удалён", show_alert=True)
+        return
+    is_admin = db_user.role == UserRole.ADMIN
+    if comment.user_id != db_user.id and not is_admin:
+        await callback.answer("⛔ Нет прав", show_alert=True)
+        return
+    await task_service.delete_comment(session, comment_id)
+    try:
+        await callback.message.edit_text(f"🗑 Комментарий #{comment_id} удалён.")
+    except Exception:
+        pass
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("comment_del_no:"))
+async def cancel_delete_comment(callback: CallbackQuery, session: AsyncSession, db_user: User):
+    _, task_id_s, comment_id_s = callback.data.split(":")
+    task_id, comment_id = int(task_id_s), int(comment_id_s)
+    comment = await task_service.get_comment(session, comment_id)
+    if not comment:
+        await callback.message.edit_text(f"🗑 Комментарий #{comment_id} уже удалён.")
+        await callback.answer()
+        return
+    is_admin = db_user.role == UserRole.ADMIN
+    can_edit = comment.user_id == db_user.id
+    can_delete = can_edit or is_admin
+    await callback.message.edit_reply_markup(
+        reply_markup=comment_actions_keyboard(task_id, comment_id, can_edit, can_delete)
+    )
+    await callback.answer()
 
 
 # --- Delete task ---

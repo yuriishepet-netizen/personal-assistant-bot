@@ -140,6 +140,34 @@ async def add_comment(session: AsyncSession, task_id: int, user_id: int, text: s
     return comment
 
 
+async def get_comment(session: AsyncSession, comment_id: int) -> Comment | None:
+    result = await session.execute(
+        select(Comment)
+        .options(selectinload(Comment.user))
+        .where(Comment.id == comment_id)
+    )
+    return result.scalar_one_or_none()
+
+
+async def update_comment(session: AsyncSession, comment_id: int, text: str) -> Comment | None:
+    comment = await get_comment(session, comment_id)
+    if not comment:
+        return None
+    comment.text = text
+    await session.commit()
+    await session.refresh(comment)
+    return comment
+
+
+async def delete_comment(session: AsyncSession, comment_id: int) -> bool:
+    comment = await get_comment(session, comment_id)
+    if not comment:
+        return False
+    await session.delete(comment)
+    await session.commit()
+    return True
+
+
 async def add_attachment(
     session: AsyncSession, task_id: int, file_type: str, file_url: str, original_name: str | None = None
 ) -> Attachment:

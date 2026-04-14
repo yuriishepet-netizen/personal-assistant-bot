@@ -251,3 +251,45 @@ async def add_comment_endpoint(
 ):
     comment = await task_service.add_comment(session, task_id, current_user.id, body.text)
     return {"id": comment.id, "task_id": comment.task_id, "text": comment.text, "created_at": comment.created_at}
+
+
+@router.patch("/{task_id}/comments/{comment_id}")
+async def update_comment_endpoint(
+    task_id: int,
+    comment_id: int,
+    body: CommentCreate,
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+):
+    comment = await task_service.get_comment(session, comment_id)
+    if not comment or comment.task_id != task_id:
+        raise HTTPException(status_code=404, detail="Comment not found")
+    # Only the author may edit their own comment
+    if comment.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You can only edit your own comments")
+    updated = await task_service.update_comment(session, comment_id, body.text)
+    return {
+        "id": updated.id,
+        "task_id": updated.task_id,
+        "user_id": updated.user_id,
+        "user_name": updated.user.name if updated.user else None,
+        "text": updated.text,
+        "created_at": updated.created_at,
+    }
+
+
+@router.delete("/{task_id}/comments/{comment_id}", status_code=200)
+async def delete_comment_endpoint(
+    task_id: int,
+    comment_id: int,
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+):
+    comment = await task_service.get_comment(session, comment_id)
+    if not comment or comment.task_id != task_id:
+        raise HTTPException(status_code=404, detail="Comment not found")
+    # Author can delete own comment; admins can delete any
+    if comment.user_id != current_user.id and current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="You can only delete your own comments")
+    await task_service.delete_comment(session, comment_id)
+    return {"status": "ok", "message": f"Comment #{comment_id} deleted"}
