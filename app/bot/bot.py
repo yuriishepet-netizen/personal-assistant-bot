@@ -10,7 +10,13 @@ from aiogram.types import BotCommand, MenuButtonCommands
 
 from app.config import get_settings
 from app.bot.middlewares import DbSessionMiddleware, AuthMiddleware
-from app.bot.handlers import common, tasks, voice, photo, calendar, claude_chat, browser_agent
+from app.bot.handlers import common, tasks, voice, photo, calendar, claude_chat
+
+# browser_agent is optional (may not exist yet — developed in parallel)
+try:
+    from app.bot.handlers import browser_agent
+except ImportError:
+    browser_agent = None
 from app.services.reminder import reminder_loop
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -48,7 +54,8 @@ def create_dispatcher() -> Dispatcher:
     # Register routers (order matters — common first, text handler last)
     dp.include_router(common.router)
     dp.include_router(claude_chat.router)  # Claude AI chat — before tasks to catch state
-    dp.include_router(browser_agent.router)  # Browser agent — before tasks to catch state
+    if browser_agent is not None:
+        dp.include_router(browser_agent.router)  # Browser agent (optional)
     dp.include_router(calendar.router)
     dp.include_router(voice.router)
     dp.include_router(photo.router)
