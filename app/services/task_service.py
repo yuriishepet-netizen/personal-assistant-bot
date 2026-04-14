@@ -67,6 +67,8 @@ async def get_tasks(
     priority: TaskPriority | None = None,
     project_id: int | None = None,
     current_user_id: int | None = None,
+    deadline_from: datetime | None = None,
+    deadline_to: datetime | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> list[Task]:
@@ -84,6 +86,12 @@ async def get_tasks(
         query = query.where(Task.priority == priority)
     if project_id:
         query = query.where(Task.project_id == project_id)
+    if deadline_from is not None:
+        query = query.where(Task.deadline >= deadline_from)
+    if deadline_to is not None:
+        query = query.where(Task.deadline <= deadline_to)
+    if deadline_from is not None or deadline_to is not None:
+        query = query.where(Task.deadline.isnot(None))
 
     # Filter out tasks from private projects the user doesn't have access to
     if current_user_id is not None:

@@ -20,10 +20,13 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
             ],
             [
                 KeyboardButton(text="🤖 Claude AI"),
-                KeyboardButton(text="📅 Календарь"),
+                KeyboardButton(text="🌐 Браузер"),
             ],
             [
+                KeyboardButton(text="📅 Календарь"),
                 KeyboardButton(text="👥 Команда"),
+            ],
+            [
                 KeyboardButton(text="❓ Помощь"),
             ],
         ],
@@ -53,7 +56,7 @@ def task_confirm_keyboard(temp_id: str) -> InlineKeyboardMarkup:
 def task_status_keyboard(task_id: int) -> InlineKeyboardMarkup:
     """Keyboard for changing task status."""
     statuses = {
-        TaskStatus.BACKLOG: "📋 Бэклог",
+        TaskStatus.BACKLOG: "📋 Список задач",
         TaskStatus.IN_PROGRESS: "🔄 В работе",
         TaskStatus.REVIEW: "👀 На проверке",
         TaskStatus.DONE: "✅ Готово",

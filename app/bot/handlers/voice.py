@@ -4,6 +4,7 @@ import logging
 import uuid
 
 from aiogram import Router, F, Bot
+from aiogram.filters import StateFilter
 from aiogram.types import Message
 from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,7 +18,7 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 
-@router.message(F.voice)
+@router.message(F.voice, StateFilter(None))
 async def handle_voice(message: Message, bot: Bot, session: AsyncSession, db_user: User, state: FSMContext):
     """Process voice message: transcribe → parse → suggest task/meeting."""
     await message.answer("🎤 Слушаю...")

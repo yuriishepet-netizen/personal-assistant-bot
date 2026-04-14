@@ -96,6 +96,8 @@ async def list_tasks(
     priority: TaskPriority | None = None,
     assignee_id: int | None = None,
     project_id: int | None = None,
+    deadline_from: datetime | None = None,
+    deadline_to: datetime | None = None,
     limit: int = Query(default=50, le=100),
     offset: int = Query(default=0, ge=0),
     session: AsyncSession = Depends(get_session),
@@ -103,7 +105,9 @@ async def list_tasks(
 ):
     tasks = await task_service.get_tasks(
         session, status=status, assignee_id=assignee_id, priority=priority,
-        project_id=project_id, current_user_id=current_user.id, limit=limit, offset=offset,
+        project_id=project_id, current_user_id=current_user.id,
+        deadline_from=deadline_from, deadline_to=deadline_to,
+        limit=limit, offset=offset,
     )
     return [_task_to_response(t) for t in tasks]
 
@@ -150,9 +154,44 @@ async def update_task_endpoint(
     updates = body.model_dump(exclude_unset=True)
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
+
+    # --- Role restriction: only admin can mark as done ---
+    new_status = updates.get("status")
+    if new_status == TaskStatus.DONE and current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Only admins can mark tasks as done. Move to 'review' instead.",
+        )
+
+    # Get old task to detect status change
+    old_task = await task_service.get_task(session, task_id)
+    old_status = old_task.status if old_task else None
+
     task = await task_service.update_task(session, task_id, **updates)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+
+    # --- Notify admins when task moves to review (from web app) ---
+    if (
+        new_status == TaskStatus.REVIEW
+        and old_status != TaskStatus.REVIEW
+    ):
+        try:
+            from app.bot.bot import get_bot
+            from app.services import notification_service, user_service as us
+
+            bot = get_bot()
+            if bot:
+                admin_users = await us.get_admin_users(session)
+                admins_to_notify = [a for a in admin_users if a.id != current_user.id]
+                if admins_to_notify:
+                    await notification_service.notify_task_review(
+                        bot=bot, task=task, admin_users=admins_to_notify,
+                    )
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error("Failed to send review notification from API: %s", e)
+
     return _task_to_response(task)
 
 

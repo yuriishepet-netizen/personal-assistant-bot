@@ -56,6 +56,7 @@ _MENU_BUTTONS = frozenset({
 class TaskEditStates(StatesGroup):
     waiting_deadline = State()
     waiting_comment = State()
+    waiting_rework_feedback = State()
 
 
 def _format_task_card(parsed) -> str:
@@ -561,16 +562,185 @@ async def change_status(callback: CallbackQuery, session: AsyncSession, db_user:
     parts = callback.data.split(":")
     task_id, new_status = int(parts[1]), parts[2]
 
+    # --- Role restrictions ---
+    is_admin = db_user.role == UserRole.ADMIN
+
+    # Only admin can mark tasks as done
+    if new_status == "done" and not is_admin:
+        await callback.answer("⛔ Только администратор может завершать задачи. Переведи в «На проверке».", show_alert=True)
+        return
+
     task = await task_service.update_task(session, task_id, status=TaskStatus(new_status))
     if task:
-        is_admin = db_user.role == UserRole.ADMIN
         status_label = STATUS_LABELS.get(new_status, new_status)
         await callback.message.edit_text(
             f"✅ Статус задачи <b>#{task.id}</b> изменён на <b>{status_label}</b>",
             reply_markup=task_actions_keyboard(task_id, is_admin=is_admin),
             parse_mode="HTML",
         )
+
+        # --- Notify admins when task moves to review ---
+        if new_status == "review":
+            admin_users = await user_service.get_admin_users(session)
+            # Don't notify the admin who changed the status themselves
+            admins_to_notify = [a for a in admin_users if a.id != db_user.id]
+            if admins_to_notify:
+                await notification_service.notify_task_review(
+                    bot=callback.bot,
+                    task=task,
+                    admin_users=admins_to_notify,
+                )
+            elif is_admin:
+                # Admin moved their own task to review — still send review buttons
+                await notification_service.notify_task_review(
+                    bot=callback.bot,
+                    task=task,
+                    admin_users=[db_user],
+                )
+
     await callback.answer()
+
+
+# --- Review: Accept / Rework ---
+
+
+@router.callback_query(F.data.startswith("review_accept:"))
+async def review_accept_task(callback: CallbackQuery, session: AsyncSession, db_user: User):
+    """Admin accepts a task from review → mark as done."""
+    if db_user.role != UserRole.ADMIN:
+        await callback.answer("⛔ Только администратор может принимать задачи", show_alert=True)
+        return
+
+    task_id = int(callback.data.split(":")[1])
+    task = await task_service.update_task(session, task_id, status=TaskStatus.DONE)
+    if not task:
+        await callback.answer("Задача не найдена")
+        return
+
+    await callback.message.edit_text(
+        f"✅ Задача <b>#{task.id} {task.title}</b> принята и завершена!",
+        parse_mode="HTML",
+    )
+    await callback.answer("Задача принята ✅")
+
+    # Notify assignee that task was accepted
+    if task.assignee and task.assignee.id != db_user.id:
+        await notification_service.notify_task_accepted(
+            bot=callback.bot,
+            task=task,
+            assignee=task.assignee,
+            reviewer=db_user,
+        )
+
+
+@router.callback_query(F.data.startswith("review_rework:"))
+async def review_rework_task(callback: CallbackQuery, session: AsyncSession, db_user: User, state: FSMContext):
+    """Admin requests rework — ask for feedback (text or voice)."""
+    if db_user.role != UserRole.ADMIN:
+        await callback.answer("⛔ Только администратор может отправлять на доработку", show_alert=True)
+        return
+
+    task_id = int(callback.data.split(":")[1])
+    task = await task_service.get_task(session, task_id)
+    if not task:
+        await callback.answer("Задача не найдена")
+        return
+
+    await state.update_data(rework_task_id=task_id)
+    await state.set_state(TaskEditStates.waiting_rework_feedback)
+
+    await callback.message.edit_text(
+        f"🔄 <b>Доработка задачи #{task.id}</b>\n\n"
+        f"<b>{task.title}</b>\n\n"
+        f"💬 Напиши текст или запиши голосовое сообщение — что нужно доработать:",
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.message(TaskEditStates.waiting_rework_feedback, F.text)
+async def process_rework_text(message: Message, session: AsyncSession, db_user: User, state: FSMContext):
+    """Process text feedback for task rework."""
+    data = await state.get_data()
+    task_id = data.get("rework_task_id")
+    if not task_id:
+        await state.set_state(None)
+        return
+
+    feedback = message.text
+
+    # Save comment
+    await task_service.add_comment(session, task_id, db_user.id, f"🔄 Доработка: {feedback}")
+
+    # Move task back to in_progress
+    task = await task_service.update_task(session, task_id, status=TaskStatus.IN_PROGRESS)
+
+    await state.set_state(None)
+
+    if task:
+        await message.answer(
+            f"🔄 Задача <b>#{task.id}</b> отправлена на доработку.\n"
+            f"💬 Комментарий сохранён.",
+            parse_mode="HTML",
+        )
+        # Notify assignee about rework
+        if task.assignee and task.assignee.id != db_user.id:
+            await notification_service.notify_rework(
+                bot=message.bot,
+                task=task,
+                assignee=task.assignee,
+                feedback=feedback,
+                reviewer=db_user,
+            )
+
+
+@router.message(TaskEditStates.waiting_rework_feedback, F.voice)
+async def process_rework_voice(message: Message, session: AsyncSession, db_user: User, state: FSMContext):
+    """Process voice feedback for task rework — transcribe and save."""
+    data = await state.get_data()
+    task_id = data.get("rework_task_id")
+    if not task_id:
+        await state.set_state(None)
+        return
+
+    await message.answer("🎤 Транскрибирую голосовое...")
+
+    try:
+        # Download voice file
+        voice_file = await message.bot.get_file(message.voice.file_id)
+        voice_bytes = await message.bot.download_file(voice_file.file_path)
+        audio_data = voice_bytes.read()
+
+        # Transcribe
+        feedback = await ai_parser.transcribe_voice(audio_data)
+    except Exception as e:
+        logger.error("Failed to transcribe rework voice: %s", e)
+        await message.answer("❌ Не удалось распознать голосовое. Попробуй написать текстом.")
+        return
+
+    # Save comment
+    await task_service.add_comment(session, task_id, db_user.id, f"🔄 Доработка (голосовое): {feedback}")
+
+    # Move task back to in_progress
+    task = await task_service.update_task(session, task_id, status=TaskStatus.IN_PROGRESS)
+
+    await state.set_state(None)
+
+    if task:
+        await message.answer(
+            f"🔄 Задача <b>#{task.id}</b> отправлена на доработку.\n"
+            f"💬 Комментарий: <i>{feedback[:200]}</i>",
+            parse_mode="HTML",
+        )
+        # Notify assignee about rework
+        if task.assignee and task.assignee.id != db_user.id:
+            await notification_service.notify_rework(
+                bot=message.bot,
+                task=task,
+                assignee=task.assignee,
+                feedback=feedback,
+                reviewer=db_user,
+            )
 
 
 # --- Comments ---

@@ -10,7 +10,7 @@ from aiogram.types import BotCommand, MenuButtonCommands
 
 from app.config import get_settings
 from app.bot.middlewares import DbSessionMiddleware, AuthMiddleware
-from app.bot.handlers import common, tasks, voice, photo, calendar, claude_chat
+from app.bot.handlers import common, tasks, voice, photo, calendar, claude_chat, browser_agent
 from app.services.reminder import reminder_loop
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -18,12 +18,22 @@ logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
+_bot_instance: Bot | None = None
+
 
 def create_bot() -> Bot:
-    return Bot(
+    global _bot_instance
+    bot = Bot(
         token=settings.TELEGRAM_BOT_TOKEN,
         default=DefaultBotProperties(parse_mode="HTML"),
     )
+    _bot_instance = bot
+    return bot
+
+
+def get_bot() -> Bot | None:
+    """Get the running bot instance (available after create_bot() is called)."""
+    return _bot_instance
 
 
 def create_dispatcher() -> Dispatcher:
@@ -38,6 +48,7 @@ def create_dispatcher() -> Dispatcher:
     # Register routers (order matters — common first, text handler last)
     dp.include_router(common.router)
     dp.include_router(claude_chat.router)  # Claude AI chat — before tasks to catch state
+    dp.include_router(browser_agent.router)  # Browser agent — before tasks to catch state
     dp.include_router(calendar.router)
     dp.include_router(voice.router)
     dp.include_router(photo.router)
@@ -52,6 +63,8 @@ async def set_bot_commands(bot: Bot):
         BotCommand(command="tasks", description="📋 Список задач"),
         BotCommand(command="my", description="👤 Мои задачи"),
         BotCommand(command="ai", description="🤖 Чат с Claude AI"),
+        BotCommand(command="browse", description="🌐 Поиск в интернете"),
+        BotCommand(command="browsemode", description="🌐 Режим браузера"),
         BotCommand(command="calendar", description="📅 Google Calendar"),
         BotCommand(command="team", description="👥 Команда"),
         BotCommand(command="connect_google", description="🔗 Подключить Google"),

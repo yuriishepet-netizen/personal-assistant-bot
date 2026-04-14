@@ -100,6 +100,12 @@ async def set_user_role(session: AsyncSession, user_id: int, role: UserRole) -> 
     return user
 
 
+async def get_admin_users(session: AsyncSession) -> list[User]:
+    """Get all users with admin role."""
+    result = await session.execute(select(User).where(User.role == UserRole.ADMIN))
+    return list(result.scalars().all())
+
+
 async def save_google_token(session: AsyncSession, user_id: int, refresh_token: str) -> None:
     result = await session.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
