@@ -133,17 +133,32 @@ async def handle_text_message(message: Message, session: AsyncSession, db_user: 
         )
     except Exception as e:
         error_msg = str(e).lower()
-        logger.error(f"AI parse error: {e}")
+        logger.exception(f"AI parse error: {e}")
         if "resource_exhausted" in error_msg or "quota" in error_msg or "429" in error_msg:
             await message.answer(
                 "⏳ Превышен лимит запросов к AI (Gemini). Подожди минуту и попробуй снова.\n"
                 "💡 Для снятия лимитов включи billing на Google AI Studio."
             )
-        elif "api_key" in error_msg or "unauthorized" in error_msg or "401" in error_msg:
+            return
+        if "api_key" in error_msg or "unauthorized" in error_msg or "401" in error_msg:
             await message.answer("🔑 Ошибка API ключа Gemini. Обратись к администратору.")
-        else:
-            await message.answer("❌ Не удалось распознать задачу. Попробуй переформулировать.")
-        return
+            return
+
+        # Fallback: create a minimal task from the raw text so the user doesn't lose it.
+        # Show the actual error so we can diagnose instead of a generic message.
+        short_err = str(e)[:200]
+        await message.answer(
+            f"⚠️ AI не смог разобрать задачу (<code>{short_err}</code>).\n"
+            "Создаю черновик из сырого текста — можешь подтвердить или отменить.",
+            parse_mode="HTML",
+        )
+        from app.services.ai_parser import ParsedTask
+        parsed = ParsedTask(
+            type="task",
+            title=message.text[:120],
+            description=message.text if len(message.text) > 120 else None,
+            confidence=0.0,
+        )
 
     temp_id = str(uuid.uuid4())[:8]
     await state.update_data({
