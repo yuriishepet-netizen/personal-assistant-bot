@@ -181,16 +181,27 @@ async def update_task_endpoint(
             from app.services import notification_service, user_service as us
 
             bot = get_bot()
-            if bot:
-                admin_users = await us.get_admin_users(session)
-                admins_to_notify = [a for a in admin_users if a.id != current_user.id]
-                if admins_to_notify:
-                    await notification_service.notify_task_review(
-                        bot=bot, task=task, admin_users=admins_to_notify,
-                    )
+            if bot is None:
+                # Fallback: create a fresh Bot instance (bot process may not share memory)
+                from aiogram import Bot
+                from aiogram.client.default import DefaultBotProperties
+                from app.config import get_settings as _get_settings
+                _s = _get_settings()
+                bot = Bot(
+                    token=_s.TELEGRAM_BOT_TOKEN,
+                    default=DefaultBotProperties(parse_mode="HTML"),
+                )
+
+            admin_users = await us.get_admin_users(session)
+            # Notify all admins — including the one who moved it (per user request:
+            # "мне по всем задачам приходил пуш")
+            if admin_users:
+                await notification_service.notify_task_review(
+                    bot=bot, task=task, admin_users=admin_users,
+                )
         except Exception as e:
             import logging
-            logging.getLogger(__name__).error("Failed to send review notification from API: %s", e)
+            logging.getLogger(__name__).exception("Failed to send review notification from API: %s", e)
 
     return _task_to_response(task)
 
